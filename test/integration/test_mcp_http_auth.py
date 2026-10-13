@@ -383,13 +383,21 @@ def test_jwks_verification_fetches_new_key_on_rotation() -> None:
     second_token = second.create_token(
         issuer=JWT_ISSUER, audience=JWT_AUDIENCE, kid="second"
     )
-    with patch(
-        "fastmcp.server.auth.providers.jwt.ssrf_safe_fetch",
-        new=AsyncMock(
-            side_effect=[_jwks_bytes(first, "first"), _jwks_bytes(second, "second")]
-        ),
-    ) as fetch:
+    with (
+        patch(
+            "fastmcp.server.auth.providers.jwt.ssrf_safe_fetch",
+            new=AsyncMock(
+                side_effect=[_jwks_bytes(first, "first"), _jwks_bytes(second, "second")]
+            ),
+        ) as fetch,
+        patch(
+            "fastmcp.server.auth.providers.jwt.time.monotonic", return_value=10_000.0
+        ) as clock,
+    ):
         assert asyncio.run(verifier.verify_token(first_token)) is not None
+        assert asyncio.run(verifier.verify_token(first_token)) is not None
+        assert fetch.await_count == 1
+        clock.return_value += 31.0
         assert asyncio.run(verifier.verify_token(second_token)) is not None
     assert fetch.await_count == 2
 
