@@ -17,7 +17,7 @@ The e2e testing environment provides:
 ### Prerequisites
 
 - **Container Runtime**: Docker or Podman (auto-detected)
-- **Node.js/npm**: For MCP Inspector CLI tool
+- **Node.js/npm**: Node 24 recommended (at least 22.19.0) for the locked MCP Inspector CLI
 - **OpenSSL**: For certificate generation
 - **Utilities**: `curl` and `jq` for connectivity testing
 
@@ -141,7 +141,7 @@ These tests verify:
 - **SSL/Authentication**: Proper handling of self-signed certificates and basic auth
 - **Real Data Validation**: Confirms tools return valid Redfish JSON responses
 
-**Implementation**: Uses the official MCP Inspector CLI v2 for reliable, maintainable testing. The pinned npm package version is stored in `e2e/inspector-version.lock` (policy in `e2e/inspector-version.toml`); minor/patch updates are applied by the dependency-update workflow.
+**Implementation**: Uses the official MCP Inspector CLI v2. The direct pin is in `e2e/inspector-version.lock` (policy in `e2e/inspector-version.toml`); its full dependency graph is in `e2e/package-lock.json`. Updates use a seven-day publication cutoff for the whole graph. `make inspector-install` and e2e targets run `npm ci --ignore-scripts`; execution uses the local CLI, not an on-demand npm install. See [dependency policy](README.md#automated-dependency-updates).
 
 ### 3. Agent-Based Tests
 
@@ -171,7 +171,7 @@ These tests verify:
 The emulator can be configured via environment variables:
 
 ```bash
-export EMULATOR_IMAGE="dmtf/redfish-interface-emulator:latest"
+export EMULATOR_IMAGE="dmtf/redfish-interface-emulator:latest@sha256:a03a894b13e566b06314cfc05aa58a23882378bc2e0a9220b7c5e3d5194e2f91"
 export EMULATOR_PORT="5000"
 export EMULATOR_HOST="127.0.0.1"
 export CONTAINER_NAME="redfish-emulator-e2e"
@@ -185,13 +185,16 @@ uses a static client. Loopback JWKS and introspection need
 `MCP_AUTH_JWKS_ALLOW_PRIVATE=true` / `MCP_AUTH_INTROSPECTION_ALLOW_PRIVATE=true`.
 
 ```bash
-export DEX_IMAGE="ghcr.io/dexidp/dex:v2.43.1"
+export DEX_IMAGE="ghcr.io/dexidp/dex:v2.43.1@sha256:0881d3c9359b436d585b2061736ce271c100331e073be9178ef405ce5bf09557"
 export DEX_HOST="127.0.0.1"
 export DEX_PORT="5556"
 export DEX_ISSUER="https://127.0.0.1:5556/dex"
 export DEX_MCP_PORT="18080"  # MCP listen port; must match Dex redirectURIs
 export DEX_CONTAINER_NAME="dex-e2e"
 ```
+
+Overriding `DEX_IMAGE` is operator-controlled and bypasses the repository's
+digest pin and Renovate cooldown safeguards.
 
 ### Certificate Settings
 
@@ -246,14 +249,15 @@ export REDFISH_SERVER_CA_CERT="e2e/certs/server.crt"
 # Test with MCP Inspector (interactive UI; uses pinned version from e2e/inspector-version.lock)
 make inspect
 
-# Or launch the web UI directly with the pinned package:
-INSPECTOR="$(uv run python -c "from e2e.inspector_version import load_inspector_package_spec; print(load_inspector_package_spec())")"
-npx "$INSPECTOR" uv run python -m src.main
+# Or launch the web UI directly with the locked dependency graph:
+make inspector-install
+INSPECTOR="./e2e/node_modules/.bin/mcp-inspector"
+"$INSPECTOR" uv run python -m src.main
 
 # Test with MCP Inspector CLI v2 (server command first, then `--`, then inspector flags)
-npx "$INSPECTOR" --cli uv run python -m src.main -- --method tools/list --format json
-npx "$INSPECTOR" --cli uv run python -m src.main -- --method tools/call --tool-name list_servers --format json
-npx "$INSPECTOR" --cli uv run python -m src.main -- \
+"$INSPECTOR" --cli uv run python -m src.main -- --method tools/list --format json
+"$INSPECTOR" --cli uv run python -m src.main -- --method tools/call --tool-name list_servers --format json
+"$INSPECTOR" --cli uv run python -m src.main -- \
   --method tools/call --tool-name get_resource_data \
   --tool-arg 'url=https://127.0.0.1:5000/redfish/v1' --format json
 

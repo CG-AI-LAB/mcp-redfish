@@ -302,11 +302,21 @@ make lint format type-check security test
 ### Dependency Updates
 The project uses automated dependency updates via GitHub Actions:
 
-- **Schedule**: Weekly on Mondays at 9 AM UTC
+- **Schedule**: Monday, Wednesday, and Friday at 09:00 UTC (every two or three days)
 - **Workflow**: `dependency-updates.yml`
-- **Behavior**: Creates PRs with updated `uv.lock` file
-- **Major-version indicator**: The same workflow also runs a non-mutating check that reports direct runtime dependencies with a newer major release on PyPI in the job summary
+- **Behavior**: Creates PRs updating `uv.lock`, `e2e/inspector-version.lock`, and the Inspector npm manifest/lockfile to the newest compatible releases eligible under a seven-day publication cutoff
+- **Cooldown**: One UTC cutoff is shared by uv (direct and transitive registry artifacts) and Inspector (npm publication timestamps). Unknown Inspector publication times are excluded; the current Inspector pin is retained when no eligible upgrade exists, without downgrading
+- **Inspector execution**: Rebuild its full transitive graph with `--npm-lock` (`npm update --before`); `make inspector-install`, e2e, and `make inspect` use `npm ci --ignore-scripts` and the local executable, not `npx`. The approved initial baseline is 2.9.0; resolution fails if an exact pin cannot satisfy the cutoff
+- **Manual override**: `bypass_cooldown=true` on a manual dispatch bypasses the cutoff for all updates in that run, records a warning, and still runs tests. Use only for reviewed urgent security fixes
+- **uv indicator and installer**: `UV_VERSION` pins uv to 0.12.7 in both workflows and both Dockerfile ARG defaults. Update all copies together after review. The indicator scans paginated release history and recommends the highest newer version that has cleared seven days, even if the latest is too fresh; it never changes pins or writes uv PRs/issues. Lookup failures report unknown status
+- **Notifications**: The reusable **Dependency updates available** issue reports latest/newest-eligible major versions, the manually pinned uv release, and Dex upstream releases. It updates in place each run, closes when no updates need review, and reopens as a new issue if findings recur. Renovate's **Dependency Update Dashboard** tracks Actions/images and deferred cooldown checks; GHCR Dex digest age remains unknown and requires manual review
+- **Actions/images**: Renovate owns these references only, with strict seven-day filtering and no automerge/major updates. Enable the GitHub App after merge; do not enable overlapping Dependabot version updates. Default images are digest-pinned. GHCR lacks supported publication timestamps, so Dex updates are withheld for manual review; do not silently relax timestamp requirements
 - **Testing**: Runs unit tests and e2e (including MCP Inspector integration) before creating PR
+- **Dry run**: `dry_run=true` performs updates and tests without writing issues or opening a PR
+
+See [Automated Dependency Updates](README.md#automated-dependency-updates) for
+local commands and coverage limits. To test newly merged changes, start a fresh
+**Run workflow** on `main`; re-running an old run uses its original commit.
 
 **Important**: PRs created by the dependency update workflow use `GITHUB_TOKEN`, which means CI/CD workflows **may not run automatically** on these PRs due to GitHub security restrictions.
 
@@ -318,7 +328,7 @@ The project uses automated dependency updates via GitHub Actions:
 1. Go to GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)
 2. Generate new token with `repo` scope
 3. Add token as repository secret named `PAT_TOKEN`
-4. Update `.github/workflows/dependency-updates.yml` line 47: change `secrets.GITHUB_TOKEN` to `secrets.PAT_TOKEN`
+4. In the **Create Pull Request** step of `.github/workflows/dependency-updates.yml`, change `token: ${{ secrets.GITHUB_TOKEN }}` to `token: ${{ secrets.PAT_TOKEN }}`
 5. Future dependency PRs will automatically trigger CI/CD workflows
 
 ### Review Process

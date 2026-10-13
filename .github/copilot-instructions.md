@@ -61,6 +61,21 @@ make all-checks   # Comprehensive quality checks (lint, type, security, test)
 make e2e-test     # Full e2e testing with Redfish emulator
 ```
 
+Dependency automation applies one seven-day publication cutoff to Python
+registry packages and the full Inspector npm graph. Use `--npm-lock` for updates
+and `npm ci --ignore-scripts` for execution; do not restore dynamic `npx` installs.
+Preserve this cutoff and
+the explicit, warned `bypass_cooldown` manual override. The workflow's uv 0.12.7
+installer pin (`UV_VERSION`) is maintained manually; the uv release indicator
+reports the latest stable release and recommends the highest newer version that
+has cleared seven days, scanning paginated release history without updating the
+pin. Keep the uv pins in both workflows and Dockerfile ARGs synchronized.
+Renovate covers only Actions/container references, with strict seven-day age
+filtering and digest pins; missing timestamps withhold updates (notably GHCR).
+Major-version notices show latest available and newest eligible without changing
+constraints. Checks run Monday, Wednesday, and Friday at 09:00 UTC.
+See [README](../README.md#automated-dependency-updates) for limits.
+
 ### Testing Strategy
 - **Unit tests**: `test/tools/`, `test/common/` - Mock Redfish responses
 - **Integration tests**: `test/integration/` - Real client interactions

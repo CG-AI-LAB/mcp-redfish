@@ -219,9 +219,9 @@ def test_tool_response_time(mcp_client: MCPTestClient):
     # Tool call should complete within 30 seconds (generous timeout)
     assert duration < 30.0, f"Tool call took too long: {duration:.2f} seconds"
 
-    # If successful, should complete much faster (under 10 seconds for simple calls)
+    # Fresh stdio server + Inspector startup is included in this measurement.
     if result.success:
-        assert duration < 10.0, (
+        assert duration < 20.0, (
             f"Successful tool call should be faster: {duration:.2f} seconds"
         )
 

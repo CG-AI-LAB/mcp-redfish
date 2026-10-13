@@ -174,8 +174,11 @@ run-sse: install ## Run MCP server with SSE (HTTP auth required; non-loopback al
 run-streamable-http: install ## Run MCP server with streamable-http (HTTP auth required; will not start without MCP_AUTH_MODE or MCP_HTTP_AUTH=false)
 	MCP_TRANSPORT=streamable-http uv run python -m src.main
 
-inspect: install ## Run MCP Inspector for debugging
-	npx $$(uv run python -c "from e2e.inspector_version import load_inspector_package_spec; print(load_inspector_package_spec())") uv run python -m src.main
+inspector-install: ## Install the reviewed Inspector npm dependency graph
+	npm ci --prefix e2e --ignore-scripts --no-audit --no-fund
+
+inspect: install inspector-install ## Run MCP Inspector for debugging
+	./e2e/node_modules/.bin/mcp-inspector uv run python -m src.main
 
 # Container targets (generic - works with Docker or Podman)
 container-build: ## Build container image (set HTTP_PROXY/HTTPS_PROXY env vars for proxy support)
@@ -248,13 +251,13 @@ e2e-dex-status: ## Check Dex status
 e2e-dex-logs: ## Show Dex logs
 	./e2e/scripts/dex.sh logs
 
-e2e: install-test e2e-emulator-start e2e-dex-start ## Run e2e tests
+e2e: install-test inspector-install e2e-emulator-start e2e-dex-start ## Run e2e tests
 	uv run pytest -v e2e/
 
-e2e-verbose: install-test e2e-emulator-start e2e-dex-start ## Run e2e tests (verbose output)
+e2e-verbose: install-test inspector-install e2e-emulator-start e2e-dex-start ## Run e2e tests (verbose output)
 	uv run pytest -vv -s e2e/
 
-e2e-cov: install-test e2e-emulator-start e2e-dex-start ## Run e2e tests with coverage (informational; use test-cov-all for enforced src coverage)
+e2e-cov: install-test inspector-install e2e-emulator-start e2e-dex-start ## Run e2e tests with coverage (informational; use test-cov-all for enforced src coverage)
 	uv run pytest --cov=src --cov-report=xml --cov-report=term-missing --cov-fail-under=0 e2e/
 
 e2e-emulator-clean: e2e-emulator-stop e2e-dex-stop ## Clean up emulator environment

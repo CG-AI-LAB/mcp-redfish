@@ -15,3 +15,5 @@ class MajorVersionFinding:
     locked_version: str
     latest_version: str
     registry: str
+    eligible_version: str | None = None
+    eligibility_unknown: bool = False

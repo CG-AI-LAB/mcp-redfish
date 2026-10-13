@@ -536,15 +536,16 @@ You can use the [MCP Inspector](https://modelcontextprotocol.io/docs/tools/inspe
 # Recommended: Makefile shortcut (uses pinned Inspector from e2e/inspector-version.lock)
 make inspect
 
-# Using console script
-INSPECTOR="$(uv run python -c "from e2e.inspector_version import load_inspector_package_spec; print(load_inspector_package_spec())")"
-npx "$INSPECTOR" uv run mcp-redfish
+# Using console script with the reviewed npm dependency graph
+make inspector-install
+./e2e/node_modules/.bin/mcp-inspector uv run mcp-redfish
 
 # Using module execution (for development)
-npx "$INSPECTOR" uv run python -m src.main
+./e2e/node_modules/.bin/mcp-inspector uv run python -m src.main
 ```
 
-Inspector minor/patch updates are automated weekly; see `e2e/inspector-version.toml`.
+Inspector minor/patch updates follow the range in `e2e/inspector-version.toml`
+and the [automated update schedule and cooldown](#automated-dependency-updates).
 
 ### End-to-End Testing
 
@@ -649,6 +650,126 @@ make all-checks    # Run full quality suite (lint, format, type-check, security,
 make check         # Quick check: linting and tests only
 make pre-commit-run # Run all pre-commit checks
 ```
+
+### Automated Dependency Updates
+
+The [dependency update workflow](.github/workflows/dependency-updates.yml) runs
+on **Monday, Wednesday, and Friday at 09:00 UTC**, every two or three days. It
+selects the newest compatible Python packages and MCP Inspector releases that
+meet a **seven-day publication cooldown**, then runs unit and e2e tests before
+opening a pull request. More frequent checks do not shorten the cooldown.
+A release becomes eligible after seven days. The next scheduled run normally
+selects it 7 to 10 days after publication, provided it meets the version
+constraints. PR review and merging can take additional time.
+
+Each run computes one UTC cutoff and passes it to uv through `UV_EXCLUDE_NEWER`
+and to the Inspector updater through `--exclude-newer`. The uv filter applies to
+direct and transitive registry dependencies and uses each distribution artifact's
+upload time, not just the version's release date. Inspector uses npm publication
+timestamps; missing, invalid, or timezone-free timestamps are excluded. If no
+eligible Inspector upgrade exists, its current pin is retained, without a
+downgrade. The npm graph is recorded in `e2e/package-lock.json` and rebuilt
+using `npm update --before` with the same cutoff, including transitive packages.
+Install scripts are disabled. Tests and `make inspect` use `npm ci` and the local
+Inspector executable, never an on-demand `npx` resolution. The initial graph
+uses the explicitly reviewed eligible Inspector 2.9.0 baseline. If npm cannot
+satisfy an exact pin and the cutoff, the run fails rather than bypassing the age
+rule or silently downgrading.
+
+The major-version notices show both **latest available** and **newest eligible
+major**. Fresh major versions are still announced immediately; the eligible
+column uses a seven-day cutoff and can select an older release. Unknown dates,
+prereleases, and yanked PyPI artifacts are excluded from eligible candidates.
+No notice changes the version ranges or installs a major upgrade.
+
+#### Actions and Container Images
+
+`renovate.json` covers GitHub Actions, both Dockerfiles, and the image references
+in the emulator and Dex scripts. It may create PRs during the M/W/F 09:00-09:59 UTC window
+with a seven-day minimum release age, strict filtering, and no automerge.
+It can propose an older eligible version when the latest is too fresh. Major
+updates are disabled, and Python image updates stay below 3.15. It does not
+update Python libraries, the Inspector graph, or the manually maintained uv pin,
+so it does not duplicate the existing dependency-update workflow.
+
+**Activation required:** enable the Renovate GitHub App for this repository after
+merging this configuration. Merely committing the file does not start the bot.
+Review its onboarding PR and initial digest-pin PRs; merge only after required
+CI checks pass. Do not enable overlapping Dependabot version updates for these
+same references. Dependabot security alerts can remain enabled independently.
+
+All default container references are pinned by digest so mutable tags cannot
+silently change the image being executed. Renovate requires publication
+timestamps: if a registry does not provide one, it withholds the update.
+Its Docker datasource currently supplies these timestamps for Docker Hub, not
+GHCR, so Dex's GHCR digest stays pinned for manual review rather than receiving
+an unverified automatic update. Explicit `EMULATOR_IMAGE`/`DEX_IMAGE` overrides
+are operator-controlled and may bypass that protection. GitHub Actions are
+configured for digest pinning by Renovate; existing floating action tags remain
+until those initial pin PRs are reviewed and merged.
+
+#### uv Maintenance
+
+The workflow installs uv **0.12.7** from a version-specific installer URL,
+using `UV_VERSION` as the shared pin for the installer and release indicator.
+The **Dependency Release Indicators** job scans GitHub's paginated uv release
+history, excluding drafts and prereleases. The workflow summary shows the latest
+stable release, its publication time and cooldown status, and the highest
+version newer than the pin that has cleared the seven-day cooldown. That
+eligible upgrade produces an **uv update available** warning, even when a newer
+release is still cooling down. For example, if `0.14.0` is too new but `0.13.0`
+has cleared the cooldown, the recommendation is `0.13.0`.
+
+Missing or invalid publication times are not treated as eligible. If there is
+no eligible upgrade, the current pin is retained without a downgrade. A failed
+lookup on any page reports an unknown status rather than a partial result or a
+claim that the pin is current.
+
+This check never updates uv, opens a uv PR, or writes a uv issue. To upgrade,
+review the release notes and change `UV_VERSION` in both workflows and the
+`UV_VERSION` ARG defaults in both Dockerfiles together; routine
+upgrades should wait for the seven-day cooldown. The dependency
+`bypass_cooldown` input does not change the uv indicator's seven-day policy or
+the installer pin. CI and Docker installs all use the reviewed uv 0.12.7 pin.
+
+To check a uv pin locally without installing anything:
+
+```bash
+python scripts/check_uv_version.py --pinned-version 0.12.7
+```
+
+The Inspector updater defaults to seven days when invoked locally. Local Python
+dependency updates need the explicit uv option:
+
+```bash
+python scripts/update_inspector_version.py --npm-lock
+uv lock --upgrade --exclude-newer "7 days"
+```
+
+The Inspector updater accepts `--cooldown-days N` for a different minimum age,
+or `--exclude-newer TIMESTAMP` for an explicit timezone-aware ISO 8601 cutoff.
+These options cannot be combined. The workflow uses the latter to share its
+cutoff with uv.
+
+For a reviewed urgent security fix, manually dispatch the workflow with
+`bypass_cooldown=true`. This bypasses the cutoff for **all updates in that run**,
+not just the affected package; review the entire resulting diff. The workflow
+summary and PR body explicitly record the bypass, and tests still run. A local
+Inspector bypass is `python scripts/update_inspector_version.py --cooldown-days 0 --npm-lock`.
+This workflow override does not relax Renovate's independent Actions/image policy.
+The `dry_run` input still performs updates and tests but skips PR and issue writes.
+Start a fresh run with **Actions > Dependency Updates > Run workflow > main**
+after merging workflow changes. Re-running an older run uses its original commit,
+not the latest code on `main`.
+
+The cooldown reduces exposure to newly compromised releases; it is not a safety
+guarantee or a replacement for known-vulnerability checks and manual review.
+It filters update candidates, not dependencies already present in the lockfiles.
+It does not cover arbitrary Git/URL dependencies, operating-system packages,
+other downloaded tools, or versions already present in a reviewed lockfile.
+New dependencies execute in CI before PR review, so restricting CI credentials
+remains important. Other workflows and local installs do not automatically gain
+this cutoff; reproducible installs should use the reviewed lockfile.
 
 ### Code Organization
 ```

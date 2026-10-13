@@ -5,6 +5,9 @@ on:
   pull_request:
     branches: [ main ]
 
+env:
+  UV_VERSION: "0.12.7"
+
 jobs:
   test:
     name: Test Suite
@@ -23,7 +26,7 @@ jobs:
 
     - name: Install uv
       run: |
-        curl -LsSf https://astral.sh/uv/install.sh | sh
+        curl -LsSf "https://astral.sh/uv/$UV_VERSION/install.sh" | sh
         echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
     - name: Install dependencies
@@ -58,7 +61,7 @@ jobs:
 
     - name: Install uv
       run: |
-        curl -LsSf https://astral.sh/uv/install.sh | sh
+        curl -LsSf "https://astral.sh/uv/$UV_VERSION/install.sh" | sh
         echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
     - name: Install dependencies
@@ -81,7 +84,7 @@ jobs:
 
     - name: Install uv
       run: |
-        curl -LsSf https://astral.sh/uv/install.sh | sh
+        curl -LsSf "https://astral.sh/uv/$UV_VERSION/install.sh" | sh
         echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
     - name: Install dependencies
@@ -140,7 +143,7 @@ jobs:
 
     - name: Install uv
       run: |
-        curl -LsSf https://astral.sh/uv/install.sh | sh
+        curl -LsSf "https://astral.sh/uv/$UV_VERSION/install.sh" | sh
         echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
     - name: Install Node.js for MCP Inspector

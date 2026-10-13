@@ -24,6 +24,7 @@ bandit-report.json
 .hypothesis/
 
 # E2E testing artifacts
+node_modules/
 e2e/certs/
 e2e/config/dex.generated.yaml
 # E2E test artifacts

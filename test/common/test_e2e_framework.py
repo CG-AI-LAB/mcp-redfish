@@ -41,6 +41,9 @@ def test_build_inspector_command_sets_pythonwarnings_ignore() -> None:
         if token == "-e" and index + 1 < len(cmd)
     ]
     assert "PYTHONWARNINGS=ignore" in env_pairs
+    assert cmd[0].endswith("/e2e/node_modules/.bin/mcp-inspector")
+    assert "npx" not in cmd
+    assert cmd[cmd.index("--connect-timeout") + 1] == "30000"
 
 
 def test_http_auth_e2e_environment_is_self_contained() -> None:

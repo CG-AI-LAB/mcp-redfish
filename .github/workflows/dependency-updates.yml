@@ -2,8 +2,8 @@ name: Dependency Updates
 
 on:
   schedule:
-    # Run weekly on Mondays at 9 AM UTC
-    - cron: '0 9 * * 1'
+    # Run every 2-3 days, without a month-boundary reset.
+    - cron: '0 9 * * 1,3,5'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -12,10 +12,19 @@ on:
           issues or opening a dependency update pull request.
         type: boolean
         default: false
+      bypass_cooldown:
+        description: >-
+          Bypass the 7-day dependency cooldown for a reviewed urgent security
+          fix. Applies to all dependency updates in this run.
+        type: boolean
+        default: false
+
+env:
+  UV_VERSION: "0.12.7"
 
 jobs:
   major-version-indicator:
-    name: Major Version Indicator
+    name: Dependency Release Indicators
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -27,6 +36,18 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: "3.14"
+
+    - name: Install pinned uv for release checks
+      run: |
+        curl -LsSf "https://astral.sh/uv/$UV_VERSION/install.sh" | sh
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+    - name: Report uv release availability
+      run: |
+        python scripts/check_uv_version.py \
+          --pinned-version "$UV_VERSION" \
+          --summary-file "$RUNNER_TEMP/uv-version.md"
+        cat "$RUNNER_TEMP/uv-version.md" >> "$GITHUB_STEP_SUMMARY"
 
     - name: Report newer major versions
       env:
@@ -40,7 +61,7 @@ jobs:
           DRY_RUN_ARGS=(--dry-run)
           echo "**Dry run:** GitHub issue sync was skipped." >> "$GITHUB_STEP_SUMMARY"
         fi
-        python scripts/manage_major_version_indicator_issue.py \
+        uv run --frozen python scripts/manage_major_version_indicator_issue.py \
           --summary-dir "$RUNNER_TEMP" \
           "${DRY_RUN_ARGS[@]}"
         if [ -f "$RUNNER_TEMP/major-versions.md" ]; then
@@ -73,23 +94,44 @@ jobs:
 
     - name: Install uv
       run: |
-        curl -LsSf https://astral.sh/uv/install.sh | sh
+        curl -LsSf "https://astral.sh/uv/$UV_VERSION/install.sh" | sh
         echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+    - name: Set dependency publication cutoff
+      id: cooldown
+      env:
+        BYPASS_COOLDOWN: ${{ github.event_name == 'workflow_dispatch' && inputs.bypass_cooldown == true }}
+      run: |
+        if [[ "$BYPASS_COOLDOWN" == "true" ]]; then
+          echo "::warning::Dependency cooldown explicitly bypassed for this run"
+          echo "policy=Bypassed for a reviewed urgent security fix" >> "$GITHUB_OUTPUT"
+          echo "**Warning:** dependency cooldown explicitly bypassed for this run." >> "$GITHUB_STEP_SUMMARY"
+        else
+          CUTOFF="$(date -u -d '7 days ago' '+%Y-%m-%dT%H:%M:%SZ')"
+          echo "UV_EXCLUDE_NEWER=$CUTOFF" >> "$GITHUB_ENV"
+          echo "policy=7 days; publication cutoff $CUTOFF" >> "$GITHUB_OUTPUT"
+          echo "**Dependency cooldown:** 7 days. Shared Python/Inspector publication cutoff: $CUTOFF." >> "$GITHUB_STEP_SUMMARY"
+        fi
 
     - name: Update dependencies
       run: |
         uv lock --upgrade
 
-    - name: Update MCP Inspector lock (minor/patch within constraint)
-      run: python scripts/update_inspector_version.py
-
-    - name: Run tests to ensure updates don't break anything
-      run: make test
-
     - name: Install Node.js for MCP Inspector
       uses: actions/setup-node@v7
       with:
         node-version: '24'
+
+    - name: Update MCP Inspector lock (minor/patch within constraint)
+      run: |
+        if [[ -n "${UV_EXCLUDE_NEWER:-}" ]]; then
+          python scripts/update_inspector_version.py --exclude-newer "$UV_EXCLUDE_NEWER" --npm-lock
+        else
+          python scripts/update_inspector_version.py --cooldown-days 0 --npm-lock
+        fi
+
+    - name: Run tests to ensure updates don't break anything
+      run: make test
 
     - name: Install system dependencies for e2e
       run: |
@@ -120,12 +162,12 @@ jobs:
       if: github.event_name == 'workflow_dispatch' && inputs.dry_run == true
       run: |
         echo "**Dry run:** dependency updates and tests completed; PR creation skipped." >> "$GITHUB_STEP_SUMMARY"
-        if git diff --quiet uv.lock e2e/inspector-version.lock; then
+        if git diff --quiet uv.lock e2e/inspector-version.lock e2e/package.json e2e/package-lock.json; then
           echo "No lockfile changes." >> "$GITHUB_STEP_SUMMARY"
         else
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
-          git diff --stat uv.lock e2e/inspector-version.lock >> "$GITHUB_STEP_SUMMARY"
+          git diff --stat uv.lock e2e/inspector-version.lock e2e/package.json e2e/package-lock.json >> "$GITHUB_STEP_SUMMARY"
           echo '```' >> "$GITHUB_STEP_SUMMARY"
         fi
 
@@ -145,8 +187,10 @@ jobs:
         body: |
           This PR contains automated dependency updates.
 
-          - Dependencies have been updated to their latest compatible versions
-          - MCP Inspector is bumped within the range in `e2e/inspector-version.toml`
+          - Python dependencies are updated in `uv.lock` and Inspector plus its transitive npm graph in `e2e/package-lock.json`, using the seven-day cutoff
+          - Actions and container image updates are tracked by Renovate's Dependency Update Dashboard, with the same age policy
+          - Dependency cooldown: ${{ steps.cooldown.outputs.policy }}
+          - The Dependency updates available issue is refreshed with latest and eligible major versions, uv status, and Dex release status
           - Unit tests and e2e tests (including MCP Inspector integration) pass
           - Please review the changes and merge if everything looks good
 
@@ -159,3 +203,5 @@ jobs:
         add-paths: |
           uv.lock
           e2e/inspector-version.lock
+          e2e/package.json
+          e2e/package-lock.json

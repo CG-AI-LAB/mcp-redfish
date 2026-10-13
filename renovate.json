@@ -1,6 +1,48 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended"
+  "extends": ["config:recommended", ":pinGitHubActionDigests"],
+  "enabledManagers": ["github-actions", "dockerfile", "custom.regex"],
+  "schedule": ["* 9 * * 1,3,5"],
+  "timezone": "Etc/UTC",
+  "minimumReleaseAge": "7 days",
+  "minimumReleaseAgeBehaviour": "timestamp-required",
+  "internalChecksFilter": "strict",
+  "dependencyDashboard": true,
+  "dependencyDashboardTitle": "Dependency Update Dashboard",
+  "dependencyDashboardHeader": "Tracks GitHub Actions and container image updates. Pending age checks are intentional; no updates are auto-merged.",
+  "dependencyDashboardFooter": "Dex uses GHCR, which does not expose a release timestamp Renovate can verify. See the Dependency updates available issue for upstream Dex releases; image digest age still requires manual review.",
+  "ignoreUnstable": true,
+  "automerge": false,
+  "pinDigests": true,
+  "packageRules": [
+    {
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["python"],
+      "allowedVersions": "<3.15"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "eligible GitHub Actions"
+    },
+    {
+      "matchDatasources": ["docker"],
+      "groupName": "eligible container images"
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": ["/^e2e/scripts/(emulator|dex)\\.sh$/"],
+      "matchStrings": [
+        "(?<prefix>(?:EMULATOR_IMAGE|DEX_IMAGE)=\"\\$\\{(?:EMULATOR_IMAGE|DEX_IMAGE):-)(?<depName>[^:}]+):(?<currentValue>[^@}]+)(?:@(?<currentDigest>sha256:[a-f0-9]+))?(?<suffix>\\}\")"
+      ],
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "docker",
+      "autoReplaceStringTemplate": "{{{prefix}}}{{{depName}}}:{{{newValue}}}{{#if newDigest}}@{{{newDigest}}}{{/if}}{{{suffix}}}"
+    }
   ]
 }
