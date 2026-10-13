@@ -41,8 +41,7 @@
         "(?<prefix>(?:EMULATOR_IMAGE|DEX_IMAGE)=\"\\$\\{(?:EMULATOR_IMAGE|DEX_IMAGE):-)(?<depName>[^:}]+):(?<currentValue>[^@}]+)(?:@(?<currentDigest>sha256:[a-f0-9]+))?(?<suffix>\\}\")"
       ],
       "datasourceTemplate": "docker",
-      "versioningTemplate": "docker",
-      "autoReplaceStringTemplate": "{{{prefix}}}{{{depName}}}:{{{newValue}}}{{#if newDigest}}@{{{newDigest}}}{{/if}}{{{suffix}}}"
+      "versioningTemplate": "docker"
     }
   ]
 }
