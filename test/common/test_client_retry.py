@@ -351,5 +351,134 @@ class TestRedfishClientRetry(unittest.TestCase):
             self.assertEqual(result, "jitter_success")
 
 
+class FakeRestResponse:
+    """Minimal stand-in for a redfish RestResponse."""
+
+    def __init__(self, data, status=200, headers=None):
+        self.dict = data
+        self.status = status
+        self._headers = headers or []
+
+    def getheaders(self):
+        return self._headers
+
+
+class TestRedfishClientHTTPStatusHandling(unittest.TestCase):
+    """Test HTTP error status handling: raise for >=400, retry only the
+    documented transient statuses (408, 429, 502, 503, 504)."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.server_cfg = {
+            "address": "test-server.example.com",
+            "username": "testuser",
+            "password": "testpass",
+            "port": 443,
+        }
+        self.common_cfg = MagicMock()
+        self.common_cfg.REDFISH_CFG = {
+            "auth_method": "session",
+            "port": 443,
+            "username": "default_user",
+            "password": "default_pass",
+            "tls_verify": True,
+            "tls_server_ca_cert": None,
+        }
+        self.mock_client = MagicMock()
+        with patch("redfish.redfish_client", return_value=self.mock_client):
+            self.client = RedfishClient(self.server_cfg, self.common_cfg)
+
+    @patch.dict(
+        os.environ,
+        {
+            "REDFISH_MAX_RETRIES": "2",
+            "REDFISH_INITIAL_DELAY": "0.01",
+        },
+    )
+    def test_get_retries_on_429_and_returns_data(self):
+        """A 429 response is retried, and a later success returns data."""
+        error_response = FakeRestResponse({"error": "Too Many Requests"}, status=429)
+        ok_response = FakeRestResponse({"Id": "1"}, status=200)
+        self.client.client.get.side_effect = [error_response, ok_response]
+
+        result = self.client.get("/redfish/v1/Systems/1")
+
+        self.assertEqual(result, {"Id": "1"})
+        self.assertEqual(self.client.client.get.call_count, 2)
+
+    @patch.dict(
+        os.environ,
+        {
+            "REDFISH_MAX_RETRIES": "2",
+            "REDFISH_INITIAL_DELAY": "0.01",
+        },
+    )
+    def test_get_retries_on_503_and_returns_data(self):
+        """A 503 response is retried, and a later success returns data."""
+        error_response = FakeRestResponse({"error": "Service Unavailable"}, status=503)
+        ok_response = FakeRestResponse({"Id": "2"}, status=200)
+        self.client.client.get.side_effect = [error_response, ok_response]
+
+        result = self.client.get("/redfish/v1/Systems/2")
+
+        self.assertEqual(result, {"Id": "2"})
+        self.assertEqual(self.client.client.get.call_count, 2)
+
+    @patch.dict(
+        os.environ,
+        {
+            "REDFISH_MAX_RETRIES": "2",
+            "REDFISH_INITIAL_DELAY": "0.01",
+        },
+    )
+    def test_get_raises_on_404_without_retry(self):
+        """A 404 response raises immediately instead of returning the error payload."""
+        error_response = FakeRestResponse({"error": "Not Found"}, status=404)
+        ok_response = FakeRestResponse({"Id": "3"}, status=200)
+        self.client.client.get.side_effect = [error_response, ok_response]
+
+        with self.assertRaises(Exception) as ctx:
+            self.client.get("/redfish/v1/Systems/3")
+
+        self.assertIn("404", str(ctx.exception))
+        self.assertEqual(self.client.client.get.call_count, 1)
+
+    @patch.dict(
+        os.environ,
+        {
+            "REDFISH_MAX_RETRIES": "2",
+            "REDFISH_INITIAL_DELAY": "0.01",
+        },
+    )
+    def test_get_with_headers_retries_on_429_and_returns_data(self):
+        """A 429 response is retried in get_with_headers too."""
+        error_response = FakeRestResponse({"error": "Too Many Requests"}, status=429)
+        ok_response = FakeRestResponse({"Id": "4"}, status=200)
+        self.client.client.get.side_effect = [error_response, ok_response]
+
+        result = self.client.get_with_headers("/redfish/v1/Systems/4")
+
+        self.assertEqual(result["data"], {"Id": "4"})
+        self.assertEqual(self.client.client.get.call_count, 2)
+
+    @patch.dict(
+        os.environ,
+        {
+            "REDFISH_MAX_RETRIES": "2",
+            "REDFISH_INITIAL_DELAY": "0.01",
+        },
+    )
+    def test_post_raises_on_400_without_retry(self):
+        """A 400 response raises immediately instead of returning the error payload."""
+        error_response = FakeRestResponse({"error": "Bad Request"}, status=400)
+        self.client.client.post.side_effect = [error_response]
+
+        with self.assertRaises(Exception) as ctx:
+            self.client.post("/redfish/v1/Systems", data={"Name": "x"})
+
+        self.assertIn("400", str(ctx.exception))
+        self.assertEqual(self.client.client.post.call_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

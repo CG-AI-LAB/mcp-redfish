@@ -23,6 +23,34 @@ from tenacity import (
 
 logger = logging.getLogger(__name__)
 
+# HTTP status codes that the docs promise to retry (transient failures)
+_RETRYABLE_HTTP_STATUSES = {408, 429, 502, 503, 504}
+
+
+class RedfishHTTPStatusError(Exception):
+    """Raised when a Redfish operation returns an HTTP error status response.
+
+    The Redfish library does not raise for HTTP error statuses; it returns the
+    response. Carries the HTTP status code so the retry predicate can retry
+    only the documented transient statuses.
+    """
+
+    def __init__(self, status: int, message: str | None = None):
+        self.status = status
+        super().__init__(message or f"Redfish request returned HTTP {status}")
+
+
+def _raise_for_status(response: Any) -> None:
+    """Raise RedfishHTTPStatusError if the response carries an HTTP error status.
+
+    Without this check an error payload (429, 503, 404, ...) would be handed
+    back as if it were resource data.
+    """
+    status = getattr(response, "status", None)
+    if isinstance(status, int) and status >= 400:
+        logger.warning("Redfish request returned HTTP %s", status)
+        raise RedfishHTTPStatusError(status)
+
 
 def _get_config_value(
     server_cfg: dict[str, Any], common_cfg: Any, key: str, default: Any = None
@@ -90,6 +118,10 @@ def should_retry_redfish_exception(retry_state):
         exception = retry_state.outcome.exception()
     else:
         return False
+
+    # HTTP status errors: retry only the documented transient statuses
+    if isinstance(exception, RedfishHTTPStatusError):
+        return exception.status in _RETRYABLE_HTTP_STATUSES
 
     # Check if it's a ToolError wrapping a retryable exception
     if isinstance(exception, ToolError):
@@ -194,6 +226,8 @@ class RedfishClient:
             logger.error(f"Redfish GET request returned None for {resource_path}")
             raise ToolError("Redfish GET request returned None")
 
+        _raise_for_status(response)
+
         logger.debug(f"Successfully retrieved resource: {resource_path}")
         return response.dict
 
@@ -218,6 +252,8 @@ class RedfishClient:
         if response is None:
             logger.error(f"Redfish GET request returned None for {resource_path}")
             raise ToolError("Redfish GET request returned None")
+
+        _raise_for_status(response)
 
         # Extract specific headers we're interested in
         headers: dict[str, str | list[str]] = {}
@@ -271,6 +307,9 @@ class RedfishClient:
             logger.warning(f"Redfish POST request failed for {resource_path}: {e}")
             raise ToolError(f"Redfish POST request failed: {e}") from e
 
+        if response is not None:
+            _raise_for_status(response)
+
         logger.debug(f"Successfully posted to resource: {resource_path}")
         return response.dict if response else {}
 
@@ -292,6 +331,9 @@ class RedfishClient:
             logger.warning(f"Redfish PATCH request failed for {resource_path}: {e}")
             raise ToolError(f"Redfish PATCH request failed: {e}") from e
 
+        if response is not None:
+            _raise_for_status(response)
+
         logger.debug(f"Successfully patched resource: {resource_path}")
         return response.dict if response else {}
 
@@ -312,6 +354,9 @@ class RedfishClient:
         except Exception as e:
             logger.warning(f"Redfish DELETE request failed for {resource_path}: {e}")
             raise ToolError(f"Redfish DELETE request failed: {e}") from e
+
+        if response is not None:
+            _raise_for_status(response)
 
         logger.debug(f"Successfully deleted resource: {resource_path}")
         return response.dict if response else {}
