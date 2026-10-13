@@ -16,15 +16,14 @@ import os
 import subprocess
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
-
-from e2e.inspector_version import load_inspector_package_spec
 
 _INSPECTOR_ENV_EXCLUDED_PREFIXES = ("VSCODE_", "__CURSOR_", "npm_config_")
 
 
 def _inspector_subprocess_env() -> dict[str, str]:
-    """Environment for npx; excludes IDE/npm vars that can break Inspector."""
+    """Exclude IDE/npm variables that can interfere with Inspector."""
     return {
         key: value
         for key, value in os.environ.items()
@@ -51,12 +50,15 @@ def build_inspector_command(
         env_flags.extend(["-e", f"{key}={value}"])
 
     return [
-        "npx",
-        load_inspector_package_spec(),
+        str(
+            Path(__file__).resolve().parent / "node_modules" / ".bin" / "mcp-inspector"
+        ),
         "--cli",
         *server_command,
         "--",
         *env_flags,
+        "--connect-timeout",
+        "30000",
         *inspector_options,
     ]
 
@@ -135,7 +137,7 @@ class MCPTestClient:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=45,
                 env=_inspector_subprocess_env(),
             )
 
@@ -213,7 +215,7 @@ class MCPTestClient:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=30,
+                timeout=45,
                 env=_inspector_subprocess_env(),
             )
 

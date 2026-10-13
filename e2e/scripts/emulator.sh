@@ -12,7 +12,7 @@ CERT_DIR="${SCRIPT_DIR}/../certs"
 CONFIG_FILE="${SCRIPT_DIR}/../config/emulator-config.json"
 
 # Configuration
-EMULATOR_IMAGE="${EMULATOR_IMAGE:-dmtf/redfish-interface-emulator:latest}"
+EMULATOR_IMAGE="${EMULATOR_IMAGE:-dmtf/redfish-interface-emulator:latest@sha256:a03a894b13e566b06314cfc05aa58a23882378bc2e0a9220b7c5e3d5194e2f91}"
 EMULATOR_PORT="${EMULATOR_PORT:-5000}"
 EMULATOR_HOST="${EMULATOR_HOST:-127.0.0.1}"
 CONTAINER_NAME="${CONTAINER_NAME:-redfish-emulator-e2e}"

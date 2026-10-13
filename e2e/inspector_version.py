@@ -8,16 +8,22 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import tomllib
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 CONFIG_PATH = Path(__file__).parent / "inspector-version.toml"
 LOCK_PATH = Path(__file__).parent / "inspector-version.lock"
 NPM_REGISTRY_URL = "https://registry.npmjs.org/{package}"
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+
+
+class NoEligibleInspectorVersion(ValueError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -83,7 +89,56 @@ def write_locked_version(version: str) -> None:
     LOCK_PATH.write_text(f"{version}\n", encoding="utf-8")
 
 
-def fetch_npm_versions(package: str) -> list[str]:
+def update_inspector_npm_lock(exclude_newer: datetime | None) -> None:
+    config = load_inspector_version_config()
+    manifest_path = CONFIG_PATH.parent / "package.json"
+    lock_path = CONFIG_PATH.parent / "package-lock.json"
+    original_manifest = manifest_path.read_bytes()
+    original_lock = lock_path.read_bytes() if lock_path.exists() else None
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["dependencies"][config.package] = config.locked_version
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    command = [
+        "npm",
+        "update",
+        "--prefix",
+        str(CONFIG_PATH.parent),
+        "--package-lock-only",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+    ]
+    if exclude_newer is not None:
+        command.extend(["--before", exclude_newer.isoformat()])
+    try:
+        subprocess.run(command, check=True)
+        if exclude_newer is not None:
+            lock = json.loads(lock_path.read_text(encoding="utf-8"))
+            metadata_by_package: dict[str, dict] = {}
+            for path, entry in lock["packages"].items():
+                if not path:
+                    continue
+                package = entry.get("name") or path.rsplit("node_modules/", 1)[-1]
+                if package not in metadata_by_package:
+                    metadata_by_package[package] = fetch_npm_metadata(package)
+                timestamp = (
+                    metadata_by_package[package].get("time", {}).get(entry["version"])
+                )
+                if not isinstance(timestamp, str):
+                    raise ValueError("npm lock contains an unknown publication time")
+                published = datetime.fromisoformat(timestamp)
+                if published.utcoffset() is None or published > exclude_newer:
+                    raise ValueError("npm lock does not satisfy the publication cutoff")
+    except Exception:
+        manifest_path.write_bytes(original_manifest)
+        if original_lock is None:
+            lock_path.unlink(missing_ok=True)
+        else:
+            lock_path.write_bytes(original_lock)
+        raise
+
+
+def fetch_npm_metadata(package: str) -> dict:
     encoded_package = package.removeprefix("@").replace("/", "%2F")
     if package.startswith("@"):
         encoded_package = f"@{encoded_package}"
@@ -93,9 +148,32 @@ def fetch_npm_versions(package: str) -> list[str]:
     )
     with urllib.request.urlopen(request, timeout=30) as response:
         payload = json.load(response)
-    versions = [
-        version for version in payload.get("versions", {}) if VERSION_RE.match(version)
-    ]
+    if not isinstance(payload, dict):
+        raise ValueError("Expected npm package metadata")
+    return payload
+
+
+def fetch_npm_versions(
+    package: str, *, exclude_newer: datetime | None = None
+) -> list[str]:
+    if exclude_newer is not None and exclude_newer.utcoffset() is None:
+        raise ValueError("Inspector cutoff must include a timezone")
+    payload = fetch_npm_metadata(package)
+    versions = []
+    for version in payload.get("versions", {}):
+        if not VERSION_RE.match(version):
+            continue
+        if exclude_newer is not None:
+            timestamp = payload.get("time", {}).get(version)
+            if not isinstance(timestamp, str):
+                continue
+            try:
+                published = datetime.fromisoformat(timestamp)
+            except ValueError:
+                continue
+            if published.utcoffset() is None or published > exclude_newer:
+                continue
+        versions.append(version)
     return sorted(versions, key=parse_version)
 
 
@@ -106,16 +184,27 @@ def latest_version_on_npm(package: str) -> str:
     return versions[-1]
 
 
-def latest_version_in_constraint(package: str, constraint: str) -> str:
+def latest_version_in_constraint(
+    package: str, constraint: str, *, exclude_newer: datetime | None = None
+) -> str:
+    versions = (
+        fetch_npm_versions(package, exclude_newer=exclude_newer)
+        if exclude_newer is not None
+        else fetch_npm_versions(package)
+    )
     matching = sorted(
         (
             version
-            for version in fetch_npm_versions(package)
+            for version in versions
             if version_satisfies_constraint(version, constraint)
         ),
         key=parse_version,
     )
     if not matching:
+        if exclude_newer is not None:
+            raise NoEligibleInspectorVersion(
+                "No Inspector releases satisfy the constraint and publication cutoff"
+            )
         raise ValueError(
             f"No npm releases for {package} satisfy constraint {constraint}"
         )

@@ -12,7 +12,7 @@ CERT_DIR="${SCRIPT_DIR}/../certs"
 TEMPLATE_FILE="${SCRIPT_DIR}/../config/dex.yaml.template"
 GENERATED_FILE="${SCRIPT_DIR}/../config/dex.generated.yaml"
 
-DEX_IMAGE="${DEX_IMAGE:-ghcr.io/dexidp/dex:v2.43.1}"
+DEX_IMAGE="${DEX_IMAGE:-ghcr.io/dexidp/dex:v2.43.1@sha256:0881d3c9359b436d585b2061736ce271c100331e073be9178ef405ce5bf09557}"
 DEX_PORT="${DEX_PORT:-5556}"
 DEX_HOST="${DEX_HOST:-127.0.0.1}"
 DEX_MCP_PORT="${DEX_MCP_PORT:-18080}"
