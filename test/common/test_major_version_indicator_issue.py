@@ -128,10 +128,16 @@ class TestMajorVersionIndicatorIssue(unittest.TestCase):
         self.assertTrue(findings[0].eligibility_unknown)
         self.assertEqual(findings[0].latest_version, "Unknown")
 
+    @patch("manage_major_version_indicator_issue.DEX_IMAGE_SCRIPT")
     @patch("manage_major_version_indicator_issue.urllib.request.urlopen")
     def test_dex_notice_reports_latest_and_eligible_source_release(
-        self, urlopen
+        self, urlopen, dex_image_script
     ) -> None:
+        dex_image_script.read_text.return_value = (
+            'DEX_IMAGE="${DEX_IMAGE:-ghcr.io/dexidp/dex:'
+            "v2.43.1@sha256:0881d3c9359b436d585b2061736ce271c100331e"
+            '073be9178ef405ce5bf09557}"'
+        )
         payload = [
             {
                 "tag_name": "v2.44.0",
