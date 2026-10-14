@@ -56,3 +56,16 @@ class TestDependencyPolicyFiles(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("secrets.PAT_TOKEN || secrets.GITHUB_TOKEN", workflow)
+
+    def test_python_cooldown_preserves_accepted_lock_versions(self) -> None:
+        workflow = (ROOT / ".github/workflows/dependency-updates.yml").read_text(
+            encoding="utf-8"
+        )
+        update_job = workflow.split("update-dependencies:", 1)[1]
+        self.assertIn("scripts/update_python_dependencies.py", update_job)
+        self.assertIn("DEPENDENCY_EXCLUDE_NEWER", update_job)
+        self.assertNotIn("UV_EXCLUDE_NEWER", update_job)
+        self.assertNotIn("uv lock --upgrade\n", update_job)
+        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        self.assertIn("[tool.dependency-updates]", pyproject)
+        self.assertIn('"packaging>=24"', pyproject)
