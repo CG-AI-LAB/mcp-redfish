@@ -1209,6 +1209,7 @@ test = [
 [package.dev-dependencies]
 dev = [
     { name = "bandit" },
+    { name = "packaging" },
     { name = "types-requests" },
 ]
 
@@ -1240,6 +1241,7 @@ provides-extras = ["dev", "test", "redis"]
 [package.metadata.requires-dev]
 dev = [
     { name = "bandit", extras = ["toml"], specifier = ">=1.8.6" },
+    { name = "packaging", specifier = ">=24" },
     { name = "types-requests", specifier = ">=2.32.4.20250913" },
 ]
 

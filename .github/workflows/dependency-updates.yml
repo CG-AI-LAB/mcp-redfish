@@ -99,14 +99,19 @@ jobs:
           echo "**Warning:** dependency cooldown explicitly bypassed for this run." >> "$GITHUB_STEP_SUMMARY"
         else
           CUTOFF="$(date -u -d '7 days ago' '+%Y-%m-%dT%H:%M:%SZ')"
-          echo "UV_EXCLUDE_NEWER=$CUTOFF" >> "$GITHUB_ENV"
+          echo "DEPENDENCY_EXCLUDE_NEWER=$CUTOFF" >> "$GITHUB_ENV"
           echo "policy=7 days; publication cutoff $CUTOFF" >> "$GITHUB_OUTPUT"
           echo "**Dependency cooldown:** 7 days. Shared Python/Inspector publication cutoff: $CUTOFF." >> "$GITHUB_STEP_SUMMARY"
         fi
 
     - name: Update dependencies
       run: |
-        uv lock --upgrade
+        if [[ -n "${DEPENDENCY_EXCLUDE_NEWER:-}" ]]; then
+          uv run --frozen python scripts/update_python_dependencies.py \
+            --exclude-newer "$DEPENDENCY_EXCLUDE_NEWER"
+        else
+          uv run --frozen python scripts/update_python_dependencies.py
+        fi
 
     - name: Install Node.js for MCP Inspector
       uses: actions/setup-node@v7
@@ -115,8 +120,8 @@ jobs:
 
     - name: Update MCP Inspector lock (minor/patch within constraint)
       run: |
-        if [[ -n "${UV_EXCLUDE_NEWER:-}" ]]; then
-          python scripts/update_inspector_version.py --exclude-newer "$UV_EXCLUDE_NEWER" --npm-lock
+        if [[ -n "${DEPENDENCY_EXCLUDE_NEWER:-}" ]]; then
+          python scripts/update_inspector_version.py --exclude-newer "$DEPENDENCY_EXCLUDE_NEWER" --npm-lock
         else
           python scripts/update_inspector_version.py --cooldown-days 0 --npm-lock
         fi

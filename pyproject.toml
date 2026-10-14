@@ -60,8 +60,14 @@ mcp-redfish = "src.main:main"
 [dependency-groups]
 dev = [
     "bandit[toml]>=1.8.6",
+    "packaging>=24",
     "types-requests>=2.32.4.20250913",
 ]
+
+[tool.dependency-updates]
+# Add temporary exact holds for manually accepted cooldown exceptions.
+# Example: preserve = ["fastmcp==4.1.0"]
+preserve = []
 
 [tool.pytest.ini_options]
 testpaths = ["test"]  # Default: only unit tests (e2e tests require explicit running)

@@ -662,14 +662,19 @@ A release becomes eligible after seven days. The next scheduled run normally
 selects it 7 to 10 days after publication, provided it meets the version
 constraints. PR review and merging can take additional time.
 
-Each run computes one UTC cutoff and passes it to uv through `UV_EXCLUDE_NEWER`
-and to the Inspector updater through `--exclude-newer`. The uv filter applies to
-direct and transitive registry dependencies and uses each distribution artifact's
-upload time, not just the version's release date. Inspector uses npm publication
-timestamps; missing, invalid, or timezone-free timestamps are excluded. If no
-eligible Inspector upgrade exists, its current pin is retained, without a
-downgrade. The npm graph is recorded in `e2e/package-lock.json` and rebuilt
-using `npm update --before` with the same cutoff, including transitive packages.
+Each run computes one UTC cutoff and passes it to the Python and Inspector
+updaters through `--exclude-newer`. The Python updater considers registry
+packages as one update set and applies the cutoff to direct and transitive
+candidates. A manually accepted cooldown exception can be held at its exact
+version in `tool.dependency-updates.preserve` in `pyproject.toml`, for example
+`preserve = ["fastmcp==4.1.0"]`. Held packages are excluded from updates and
+the run is discarded without failure if resolving other packages would change
+one. Remove the hold after the release clears the cooldown. Inspector uses npm
+publication timestamps; missing, invalid, or timezone-free timestamps are
+excluded. If no eligible Inspector upgrade exists, its current pin is retained,
+without a downgrade. The npm graph is recorded in `e2e/package-lock.json` and
+rebuilt using `npm update --before` with the same cutoff, including transitive
+packages.
 Install scripts are disabled. Tests and `make inspect` use `npm ci` and the local
 Inspector executable, never an on-demand `npx` resolution. The initial graph
 uses the explicitly reviewed eligible Inspector 2.9.0 baseline. If npm cannot
@@ -741,12 +746,14 @@ To check the current pin locally without installing anything:
 python scripts/check_uv_version.py --pinned-version "$(tr -d '[:space:]' < .uv-version)"
 ```
 
-The Inspector updater defaults to seven days when invoked locally. Local Python
-dependency updates need the explicit uv option:
+The Inspector updater defaults to seven days when invoked locally. Use the
+Python updater to preserve accepted lock versions while applying the same
+cooldown to candidate updates:
 
 ```bash
 python scripts/update_inspector_version.py --npm-lock
-uv lock --upgrade --exclude-newer "7 days"
+python scripts/update_python_dependencies.py \
+  --exclude-newer "$(date -u -d '7 days ago' '+%Y-%m-%dT%H:%M:%SZ')"
 ```
 
 The Inspector updater accepts `--cooldown-days N` for a different minimum age,

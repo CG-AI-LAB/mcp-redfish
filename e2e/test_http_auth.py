@@ -111,9 +111,11 @@ class _HttpMcpProcess:
         raise TimeoutError(self.stderr_text())
 
     def stderr_text(self) -> str:
-        self._stderr.flush()
-        self._stderr.seek(0)
-        return self._stderr.read()
+        # Read through a separate file description. Seeking the handle inherited
+        # by the child also moves the child's write offset, which can overwrite
+        # earlier startup warnings while the process is still logging.
+        with open(self._stderr.name, encoding="utf-8") as stderr:
+            return stderr.read()
 
     def close(self) -> None:
         if self._proc.poll() is None:
