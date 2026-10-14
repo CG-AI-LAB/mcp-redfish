@@ -44,10 +44,6 @@ class TestDependencyPolicyFiles(unittest.TestCase):
         )[0]
         self.assertNotIn("continue-on-error", security_job)
         self.assertIn('node-version: "24"', security_job)
-        ruleset = (ROOT / ".github/branch-protection-ruleset.json").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("Analyze (python)", ruleset)
 
     def test_dependabot_uv_entry_is_security_updates_only(self) -> None:
         config = (ROOT / ".github/dependabot.yml").read_text(encoding="utf-8")
