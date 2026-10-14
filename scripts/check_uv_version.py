@@ -7,6 +7,7 @@ import json
 import sys
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -65,6 +66,118 @@ def fetch_uv_releases() -> list[tuple[str, datetime | None]]:
     return sorted(releases, key=lambda release: parse_version(release[0]))
 
 
+@dataclass(frozen=True)
+class UvPinAssessment:
+    pinned_version: str
+    latest_version: str | None
+    published: datetime | None
+    eligible_version: str | None
+    eligible_published: datetime | None
+    lookup_failed: bool
+    eligibility_unknown: bool
+    status: str
+    recommendation: str
+
+
+def assess_uv_pin(
+    pinned_version: str,
+    *,
+    cooldown_days: int = 7,
+    releases: list[tuple[str, datetime | None]] | None = None,
+) -> UvPinAssessment:
+    """Return one cooldown assessment, fetching uv releases at most once."""
+    try:
+        resolved = fetch_uv_releases() if releases is None else releases
+    except (urllib.error.URLError, ValueError, KeyError, TypeError):
+        return UvPinAssessment(
+            pinned_version=pinned_version,
+            latest_version=None,
+            published=None,
+            eligible_version=None,
+            eligible_published=None,
+            lookup_failed=True,
+            eligibility_unknown=True,
+            status="Lookup failed; uv release status is unknown.",
+            recommendation="",
+        )
+
+    latest, published = resolved[-1]
+    pinned = parse_version(pinned_version)
+    newer = parse_version(latest) > pinned
+    cutoff = datetime.now(UTC) - timedelta(days=cooldown_days)
+    eligible = [
+        release
+        for release in resolved
+        if release[1] is not None
+        and release[1] <= cutoff
+        and parse_version(release[0]) > pinned
+    ]
+    eligibility_unknown = not eligible and any(
+        release[1] is None and parse_version(release[0]) > pinned
+        for release in resolved
+    )
+    if not newer:
+        status = "No newer stable release reported"
+    elif published is None:
+        status = "Publication time unknown; manual review required"
+    elif published > cutoff:
+        status = f"Within the {cooldown_days}-day cooldown; wait before upgrading"
+    else:
+        status = "Cooldown complete; manual pin update available"
+    recommendation = "None; keep the current pin"
+    eligible_version = None
+    eligible_published = None
+    if eligible:
+        eligible_version, eligible_published = eligible[-1]
+        assert eligible_published is not None
+        recommendation = (
+            f"`{eligible_version}` (published {eligible_published.isoformat()})"
+        )
+    return UvPinAssessment(
+        pinned_version=pinned_version,
+        latest_version=latest,
+        published=published,
+        eligible_version=eligible_version,
+        eligible_published=eligible_published,
+        lookup_failed=False,
+        eligibility_unknown=eligibility_unknown,
+        status=status,
+        recommendation=recommendation,
+    )
+
+
+def format_uv_summary(assessment: UvPinAssessment) -> str:
+    if assessment.lookup_failed:
+        return (
+            "## uv version indicator\n\nLookup failed; uv release status is unknown.\n"
+        )
+    publication = (
+        assessment.published.isoformat() if assessment.published else "Unknown"
+    )
+    return (
+        "## uv version indicator\n\n"
+        "| Pinned | Latest stable | Published | Status |\n"
+        "| --- | --- | --- | --- |\n"
+        f"| `{assessment.pinned_version}` | `{assessment.latest_version}` | "
+        f"{publication} | {assessment.status} |\n\n"
+        f"**Newest eligible upgrade:** {assessment.recommendation}.\n\n"
+        "This check is informational only; it never changes the pin. "
+        "[Release details](https://github.com/astral-sh/uv/releases).\n"
+    )
+
+
+def emit_uv_warnings(assessment: UvPinAssessment) -> None:
+    if assessment.lookup_failed:
+        print("::warning title=uv lookup failed::uv release status is unknown")
+        return
+    if assessment.eligible_version is not None:
+        print(
+            f"::warning title=uv update available::{assessment.pinned_version} -> "
+            f"{assessment.eligible_version}; cooldown complete, review and update "
+            "the pin manually"
+        )
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pinned-version", required=True)
@@ -72,59 +185,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--summary-file", type=Path)
     args = parser.parse_args(argv)
     try:
-        pinned = parse_version(args.pinned_version)
+        parse_version(args.pinned_version)
     except ValueError:
         parser.error("--pinned-version must use X.Y.Z format")
     if args.cooldown_days < 0:
         parser.error("--cooldown-days must be non-negative")
 
-    try:
-        releases = fetch_uv_releases()
-    except (urllib.error.URLError, ValueError, KeyError, TypeError):
-        summary = (
-            "## uv version indicator\n\nLookup failed; uv release status is unknown.\n"
-        )
-        print("::warning title=uv lookup failed::uv release status is unknown")
-    else:
-        latest, published = releases[-1]
-        newer = parse_version(latest) > pinned
-        cutoff = datetime.now(UTC) - timedelta(days=args.cooldown_days)
-        eligible = [
-            release
-            for release in releases
-            if release[1] is not None
-            and release[1] <= cutoff
-            and parse_version(release[0]) > pinned
-        ]
-        if not newer:
-            status = "No newer stable release reported"
-        elif published is None:
-            status = "Publication time unknown; manual review required"
-        elif published > cutoff:
-            status = (
-                f"Within the {args.cooldown_days}-day cooldown; wait before upgrading"
-            )
-        else:
-            status = "Cooldown complete; manual pin update available"
-        recommendation = "None; keep the current pin"
-        if eligible:
-            recommended, recommended_at = eligible[-1]
-            assert recommended_at is not None
-            recommendation = f"`{recommended}` (published {recommended_at.isoformat()})"
-            print(
-                f"::warning title=uv update available::{args.pinned_version} -> {recommended}; "
-                "cooldown complete, review and update the pin manually"
-            )
-        publication = published.isoformat() if published else "Unknown"
-        summary = (
-            "## uv version indicator\n\n"
-            "| Pinned | Latest stable | Published | Status |\n"
-            "| --- | --- | --- | --- |\n"
-            f"| `{args.pinned_version}` | `{latest}` | {publication} | {status} |\n\n"
-            f"**Newest eligible upgrade:** {recommendation}.\n\n"
-            "This check is informational only; it never changes the pin. "
-            "[Release details](https://github.com/astral-sh/uv/releases).\n"
-        )
+    assessment = assess_uv_pin(args.pinned_version, cooldown_days=args.cooldown_days)
+    emit_uv_warnings(assessment)
+    summary = format_uv_summary(assessment)
     print(summary)
     if args.summary_file is not None:
         args.summary_file.write_text(summary, encoding="utf-8")

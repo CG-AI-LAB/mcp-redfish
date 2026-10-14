@@ -25,7 +25,13 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from check_inspector_version import collect_inspector_major_update  # noqa: E402
 from check_major_dependency_updates import collect_outdated_major_versions  # noqa: E402
-from check_uv_version import fetch_uv_releases  # noqa: E402
+from check_uv_version import (  # noqa: E402
+    UvPinAssessment,
+    assess_uv_pin,
+    emit_uv_warnings,
+    format_uv_summary,
+    parse_version,
+)
 from major_version_findings import MajorVersionFinding  # noqa: E402
 
 ISSUE_TITLE = "Dependency updates available"
@@ -37,7 +43,34 @@ DEX_RELEASES_URL = "https://api.github.com/repos/dexidp/dex/releases"
 DEX_IMAGE_SCRIPT = ROOT / "e2e/scripts/dex.sh"
 
 
-def collect_findings() -> list[MajorVersionFinding]:
+def uv_finding_from_assessment(
+    assessment: UvPinAssessment,
+) -> MajorVersionFinding | None:
+    if assessment.lookup_failed:
+        return MajorVersionFinding(
+            package="uv installer",
+            locked_version=assessment.pinned_version,
+            latest_version="Unknown",
+            registry="uv",
+            eligibility_unknown=True,
+        )
+    if assessment.latest_version is None or parse_version(
+        assessment.latest_version
+    ) <= parse_version(assessment.pinned_version):
+        return None
+    return MajorVersionFinding(
+        package="uv installer",
+        locked_version=assessment.pinned_version,
+        latest_version=assessment.latest_version,
+        registry="uv",
+        eligible_version=assessment.eligible_version,
+        eligibility_unknown=assessment.eligibility_unknown,
+    )
+
+
+def collect_findings(
+    uv_assessment: UvPinAssessment | None = None,
+) -> list[MajorVersionFinding]:
     cutoff = datetime.now(UTC) - timedelta(days=7)
     findings = list(collect_outdated_major_versions(cutoff))
     inspector_finding = collect_inspector_major_update(cutoff)
@@ -47,49 +80,12 @@ def collect_findings() -> list[MajorVersionFinding]:
     if dex_finding is not None:
         findings.append(dex_finding)
     pinned_uv = os.environ.get("UV_VERSION")
-    if pinned_uv:
-        try:
-            uv_releases = fetch_uv_releases()
-        except (urllib.error.URLError, ValueError, KeyError, TypeError):
-            print("::warning title=uv lookup failed::uv release status is unknown")
-            findings.append(
-                MajorVersionFinding(
-                    package="uv installer",
-                    locked_version=pinned_uv,
-                    latest_version="Unknown",
-                    registry="uv",
-                    eligibility_unknown=True,
-                )
-            )
-        else:
-            latest, _ = uv_releases[-1]
-            eligible = [
-                (version, published)
-                for version, published in uv_releases
-                if published is not None
-                and published <= cutoff
-                and tuple(map(int, version.split(".")))
-                > tuple(map(int, pinned_uv.split(".")))
-            ]
-            unknown_eligibility = any(
-                published is None
-                and tuple(map(int, version.split(".")))
-                > tuple(map(int, pinned_uv.split(".")))
-                for version, published in uv_releases
-            )
-            if tuple(map(int, latest.split("."))) > tuple(
-                map(int, pinned_uv.split("."))
-            ):
-                findings.append(
-                    MajorVersionFinding(
-                        package="uv installer",
-                        locked_version=pinned_uv,
-                        latest_version=latest,
-                        registry="uv",
-                        eligible_version=eligible[-1][0] if eligible else None,
-                        eligibility_unknown=unknown_eligibility and not eligible,
-                    )
-                )
+    if uv_assessment is None and pinned_uv:
+        uv_assessment = assess_uv_pin(pinned_uv)
+    if uv_assessment is not None:
+        uv_finding = uv_finding_from_assessment(uv_assessment)
+        if uv_finding is not None:
+            findings.append(uv_finding)
     return findings
 
 
@@ -251,8 +247,8 @@ def format_issue_body(
             [
                 "## uv installer (manual pin)",
                 "",
-                "The eligible column uses the seven-day cooldown. Update `UV_VERSION` "
-                "in both workflows and both Dockerfiles together after review.",
+                "The eligible column uses the seven-day cooldown. Update `.uv-version` "
+                "after review. CI and container builds read that file.",
                 "",
                 "| Pinned | Latest available | Newest eligible |",
                 "| --- | --- | --- |",
@@ -444,6 +440,9 @@ def sync_indicator_issue(
 
 def emit_warnings(findings: list[MajorVersionFinding]) -> None:
     for finding in findings:
+        # uv has a dedicated warning with cooldown-aware wording.
+        if finding.registry == "uv":
+            continue
         if finding.latest_version == "Unknown":
             print(
                 f"::warning title=Dependency lookup status unknown::{finding.package} "
@@ -451,16 +450,25 @@ def emit_warnings(findings: list[MajorVersionFinding]) -> None:
             )
             continue
         print(
-            f"::warning title=New major version available::{finding.package} "
+            f"::warning title=Dependency update available::{finding.package} "
             f"{finding.locked_version} -> {finding.latest_version}"
         )
 
 
-def write_summary_files(summary_dir: Path, findings: list[MajorVersionFinding]) -> None:
+def write_summary_files(
+    summary_dir: Path,
+    findings: list[MajorVersionFinding],
+    uv_assessment: UvPinAssessment | None = None,
+) -> None:
     from check_inspector_version import format_summary_markdown as inspector_summary
     from check_major_dependency_updates import format_summary_markdown as python_summary
 
     summary_dir.mkdir(parents=True, exist_ok=True)
+    if uv_assessment is not None:
+        (summary_dir / "uv-version.md").write_text(
+            format_uv_summary(uv_assessment),
+            encoding="utf-8",
+        )
     python_rows = [finding for finding in findings if finding.registry == "PyPI"]
     npm_rows = [finding for finding in findings if finding.registry == "npm"]
 
@@ -510,7 +518,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    findings = collect_findings()
+    pinned_uv = os.environ.get("UV_VERSION")
+    uv_assessment = assess_uv_pin(pinned_uv) if pinned_uv else None
+    if uv_assessment is not None:
+        emit_uv_warnings(uv_assessment)
+    findings = collect_findings(uv_assessment)
 
     if findings:
         has_confirmed_updates = any(
@@ -541,7 +553,7 @@ def main(argv: list[str] | None = None) -> int:
         print("No dependency version updates require review.")
 
     if args.summary_dir is not None:
-        write_summary_files(args.summary_dir, findings)
+        write_summary_files(args.summary_dir, findings, uv_assessment)
 
     token = os.environ.get("GITHUB_TOKEN")
     repository = os.environ.get("GITHUB_REPOSITORY")

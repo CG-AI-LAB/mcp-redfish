@@ -4,8 +4,12 @@
 
 # Optimized Dockerfile for Docker with cache mounts
 FROM python:3.14.6-slim@sha256:7bec7ddcddeff7975d6ba9b4be7dd6f6b2f55e7491539145e2978f7f97ce9144
-ARG UV_VERSION=0.12.7
-RUN pip install --no-cache-dir "uv==${UV_VERSION}"
+COPY .uv-version /tmp/.uv-version
+ARG UV_VERSION
+RUN set -eu; \
+    version="${UV_VERSION:-$(tr -d '[:space:]' < /tmp/.uv-version)}"; \
+    pip install --no-cache-dir "uv==${version}"; \
+    rm /tmp/.uv-version
 
 WORKDIR /app
 COPY pyproject.toml uv.lock README.md LICENSE ./

@@ -10,6 +10,7 @@ import urllib.error
 from contextlib import redirect_stdout
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -22,6 +23,7 @@ from check_major_dependency_updates import (
 from check_major_dependency_updates import (
     format_summary_markdown as format_python_summary,
 )
+from check_uv_version import UvPinAssessment
 from major_version_findings import MajorVersionFinding
 from manage_major_version_indicator_issue import (
     ISSUE_MARKER,
@@ -29,6 +31,7 @@ from manage_major_version_indicator_issue import (
     LEGACY_ISSUE_TITLE,
     collect_dex_release_update,
     collect_findings,
+    emit_warnings,
     find_open_indicator_issue,
     format_issue_body,
     format_resolved_issue_body,
@@ -38,6 +41,19 @@ from manage_major_version_indicator_issue import (
 
 
 class TestMajorVersionIndicatorIssue(unittest.TestCase):
+    def test_warnings_skip_uv_and_do_not_call_every_update_major(self) -> None:
+        output = io.StringIO()
+        findings = [
+            MajorVersionFinding("uv installer", "0.12.7", "0.12.8", "uv"),
+            MajorVersionFinding("example", "1.2.3", "2.0.0", "PyPI"),
+        ]
+        with redirect_stdout(output):
+            emit_warnings(findings)
+        warning = output.getvalue()
+        self.assertNotIn("uv installer", warning)
+        self.assertIn("title=Dependency update available", warning)
+        self.assertNotIn("title=New major version available", warning)
+
     @patch(
         "manage_major_version_indicator_issue.collect_findings",
         return_value=[
@@ -104,7 +120,7 @@ class TestMajorVersionIndicatorIssue(unittest.TestCase):
         self.assertNotIn("found version updates to review", body)
 
     @patch(
-        "manage_major_version_indicator_issue.fetch_uv_releases",
+        "check_uv_version.fetch_uv_releases",
         side_effect=urllib.error.URLError("offline"),
     )
     @patch(
@@ -127,6 +143,54 @@ class TestMajorVersionIndicatorIssue(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertTrue(findings[0].eligibility_unknown)
         self.assertEqual(findings[0].latest_version, "Unknown")
+
+    @patch(
+        "manage_major_version_indicator_issue.collect_dex_release_update",
+        return_value=None,
+    )
+    @patch(
+        "manage_major_version_indicator_issue.collect_inspector_major_update",
+        return_value=None,
+    )
+    @patch(
+        "manage_major_version_indicator_issue.collect_outdated_major_versions",
+        return_value=[],
+    )
+    @patch("manage_major_version_indicator_issue.assess_uv_pin")
+    def test_main_reuses_one_uv_assessment(
+        self, assess, _python, _inspector, _dex
+    ) -> None:
+        published = datetime(2026, 10, 1, tzinfo=UTC)
+        assess.return_value = UvPinAssessment(
+            pinned_version="0.12.7",
+            latest_version="0.13.0",
+            published=published,
+            eligible_version="0.13.0",
+            eligible_published=published,
+            lookup_failed=False,
+            eligibility_unknown=False,
+            status="Cooldown complete; manual pin update available",
+            recommendation="`0.13.0` (published 2026-10-01T00:00:00+00:00)",
+        )
+        with (
+            TemporaryDirectory() as directory,
+            patch.dict("os.environ", {"UV_VERSION": "0.12.7"}, clear=True),
+        ):
+            self.assertEqual(main(["--summary-dir", directory]), 0)
+            summary = (Path(directory) / "uv-version.md").read_text(encoding="utf-8")
+        assess.assert_called_once_with("0.12.7")
+        self.assertIn("**Newest eligible upgrade:** `0.13.0`", summary)
+        self.assertIn(
+            ".uv-version",
+            format_issue_body(
+                [
+                    MajorVersionFinding(
+                        "uv installer", "0.12.7", "0.13.0", "uv", "0.13.0"
+                    )
+                ],
+                None,
+            ),
+        )
 
     @patch("manage_major_version_indicator_issue.DEX_IMAGE_SCRIPT")
     @patch("manage_major_version_indicator_issue.urllib.request.urlopen")

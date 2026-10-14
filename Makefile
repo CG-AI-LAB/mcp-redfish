@@ -45,7 +45,7 @@ help: ## Show this help message
 	@echo "  lint        Run ruff linting"
 	@echo "  format      Format code with ruff"
 	@echo "  type-check  Run mypy type checking"
-	@echo "  security    Run bandit security scan"
+	@echo "  security    Run Bandit and lockfile vulnerability scans"
 	@echo "  all-checks  Run all quality checks (lint, format, type-check, security, pre-commit)"
 	@echo "  check       Quick check: linting and tests only"
 	@echo "  pre-commit-install  Install pre-commit hooks"
@@ -141,9 +141,14 @@ type-check: install-dev ## Run mypy type checking
 	uv run mypy src/
 	cd e2e && uv run mypy . --namespace-packages
 
-security: install-dev ## Run bandit security scan
-	uv run bandit -r src/ -f json -o bandit-report.json -q || echo "Security scan completed (check bandit-report.json for details)"
-	uv run bandit -r src/
+security: install-dev ## Run Bandit and lockfile vulnerability scans
+	@status=0; \
+	rm -f bandit-report.json; \
+	uv run bandit -r src/ -f json -o bandit-report.json || status=$$?; \
+	if [ -f bandit-report.json ]; then cat bandit-report.json; fi; \
+	uv audit --frozen --preview-features audit-command || status=$$?; \
+	npm audit --prefix e2e --package-lock-only --audit-level=low || status=$$?; \
+	exit $$status
 
 all-checks: ## Run all quality checks including pre-commit
 	$(MAKE) lint
