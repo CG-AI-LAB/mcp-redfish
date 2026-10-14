@@ -2,6 +2,7 @@
 # Licensed under the BSD 3-Clause License.
 # SPDX-License-Identifier: BSD-3-Clause
 
+import json
 import logging
 import os
 from typing import Any
@@ -13,6 +14,7 @@ from redfish.rest.v1 import AuthMethod
 
 # Using tenacity for retry logic
 from tenacity import (
+    RetryError,
     after_log,
     before_sleep_log,
     retry,
@@ -31,25 +33,60 @@ class RedfishHTTPStatusError(Exception):
     """Raised when a Redfish operation returns an HTTP error status response.
 
     The Redfish library does not raise for HTTP error statuses; it returns the
-    response. Carries the HTTP status code so the retry predicate can retry
-    only the documented transient statuses.
+    response. Carries the HTTP status code (so the retry predicate can retry
+    only the documented transient statuses) and the Redfish error body, so
+    actionable fields such as message, MessageId, Resolution and
+    @Message.ExtendedInfo are preserved in the error text.
     """
 
-    def __init__(self, status: int, message: str | None = None):
+    def __init__(self, status: int, body: Any = None):
         self.status = status
-        super().__init__(message or f"Redfish request returned HTTP {status}")
+        self.body = body if isinstance(body, dict) else {}
+        super().__init__(_format_redfish_error(status, self.body))
+
+
+def _format_redfish_error(status: int, body: dict[str, Any]) -> str:
+    """Build an error message that keeps the Redfish error body readable."""
+    parts = [f"Redfish request returned HTTP {status}"]
+    if body:
+        error = body.get("error")
+        if isinstance(error, dict):
+            for key in ("message", "MessageId", "Resolution"):
+                value = error.get(key)
+                if value:
+                    parts.append(f"{key}: {value}")
+        extended = body.get("@Message.ExtendedInfo")
+        if extended:
+            parts.append(f"@Message.ExtendedInfo: {json.dumps(extended)}")
+    return "; ".join(parts)
 
 
 def _raise_for_status(response: Any) -> None:
     """Raise RedfishHTTPStatusError if the response carries an HTTP error status.
 
     Without this check an error payload (429, 503, 404, ...) would be handed
-    back as if it were resource data.
+    back as if it were resource data. The Redfish body (response.dict) is
+    preserved on the exception so it reaches the MCP client.
     """
     status = getattr(response, "status", None)
     if isinstance(status, int) and status >= 400:
         logger.warning("Redfish request returned HTTP %s", status)
-        raise RedfishHTTPStatusError(status)
+        raise RedfishHTTPStatusError(status, getattr(response, "dict", None))
+
+
+def _reraise_http_status_error(retry_state) -> None:
+    """Retry-exhaustion callback for the HTTP-status path.
+
+    When every attempt failed with RedfishHTTPStatusError, re-raise the final
+    error (with its status and Redfish body) instead of a generic RetryError,
+    so an LLM still sees the actionable Redfish error. Any other final
+    exception keeps tenacity's default RetryError behavior.
+    """
+    outcome = getattr(retry_state, "outcome", None)
+    exception = outcome.exception() if outcome is not None else None
+    if isinstance(exception, RedfishHTTPStatusError):
+        raise exception
+    raise RetryError(outcome) from exception
 
 
 def _get_config_value(
@@ -206,6 +243,7 @@ class RedfishClient:
 
     @retry(
         **get_retry_configuration(),
+        retry_error_callback=_reraise_http_status_error,
         before_sleep=before_sleep_log(logger, logging.WARNING),
         after=after_log(logger, logging.DEBUG),
     )
@@ -233,6 +271,7 @@ class RedfishClient:
 
     @retry(
         **get_retry_configuration(),
+        retry_error_callback=_reraise_http_status_error,
         before_sleep=before_sleep_log(logger, logging.WARNING),
         after=after_log(logger, logging.DEBUG),
     )
@@ -308,7 +347,13 @@ class RedfishClient:
             raise ToolError(f"Redfish POST request failed: {e}") from e
 
         if response is not None:
-            _raise_for_status(response)
+            # Report the HTTP error but do not retry mutations on status: a
+            # retry can duplicate a mutation whose response was lost (e.g. a
+            # reset action processed by the BMC before a 503 came back).
+            try:
+                _raise_for_status(response)
+            except RedfishHTTPStatusError as e:
+                raise ToolError(f"Redfish POST request failed: {e}") from e
 
         logger.debug(f"Successfully posted to resource: {resource_path}")
         return response.dict if response else {}
@@ -332,7 +377,11 @@ class RedfishClient:
             raise ToolError(f"Redfish PATCH request failed: {e}") from e
 
         if response is not None:
-            _raise_for_status(response)
+            # Detect and report; no status-based retry for mutations.
+            try:
+                _raise_for_status(response)
+            except RedfishHTTPStatusError as e:
+                raise ToolError(f"Redfish PATCH request failed: {e}") from e
 
         logger.debug(f"Successfully patched resource: {resource_path}")
         return response.dict if response else {}
@@ -356,7 +405,11 @@ class RedfishClient:
             raise ToolError(f"Redfish DELETE request failed: {e}") from e
 
         if response is not None:
-            _raise_for_status(response)
+            # Detect and report; no status-based retry for mutations.
+            try:
+                _raise_for_status(response)
+            except RedfishHTTPStatusError as e:
+                raise ToolError(f"Redfish DELETE request failed: {e}") from e
 
         logger.debug(f"Successfully deleted resource: {resource_path}")
         return response.dict if response else {}
