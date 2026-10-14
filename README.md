@@ -637,7 +637,7 @@ make lint          # Run ruff linting
 make format        # Format code with ruff
 make type-check    # Run MyPy type checking
 make test          # Run pytest tests
-make security      # Run bandit security scan
+make security      # Run Bandit and lockfile vulnerability scans
 
 # Development servers
 make run-stdio     # Run with stdio transport
@@ -696,7 +696,10 @@ so it does not duplicate the existing dependency-update workflow.
 merging this configuration. Merely committing the file does not start the bot.
 Review its onboarding PR and initial digest-pin PRs; merge only after required
 CI checks pass. Do not enable overlapping Dependabot version updates for these
-same references. Dependabot security alerts can remain enabled independently.
+same references. [`.github/dependabot.yml`](.github/dependabot.yml) registers the
+uv ecosystem for security updates only: `open-pull-requests-limit: 0` disables
+routine version pull requests, while security alerts and security pull requests
+remain available. Dependabot security alerts can remain enabled independently.
 
 All default container references are pinned by digest so mutable tags cannot
 silently change the image being executed. Renovate requires publication
@@ -710,32 +713,32 @@ until those initial pin PRs are reviewed and merged.
 
 #### uv Maintenance
 
-The workflow installs uv **0.12.7** from a version-specific installer URL,
-using `UV_VERSION` as the shared pin for the installer and release indicator.
-The **Dependency Release Indicators** job scans GitHub's paginated uv release
-history, excluding drafts and prereleases. The workflow summary shows the latest
-stable release, its publication time and cooldown status, and the highest
-version newer than the pin that has cleared the seven-day cooldown. That
-eligible upgrade produces an **uv update available** warning, even when a newer
-release is still cooling down. For example, if `0.14.0` is too new but `0.13.0`
-has cleared the cooldown, the recommendation is `0.13.0`.
+[`.uv-version`](.uv-version) is the only uv installer pin. CI reads it through
+[`.github/actions/install-uv`](.github/actions/install-uv), and both Dockerfiles
+install that version unless an explicit `UV_VERSION` build argument overrides
+it. The **Dependency Release Indicators** job performs one paginated GitHub
+lookup and uses that result for both the workflow summary and the dependency
+issue. Drafts and prereleases are excluded. The summary shows the latest stable
+release, its publication time and cooldown status, and the highest version
+newer than the pin that has cleared the seven-day cooldown. That eligible
+upgrade produces an **uv update available** warning, even when a newer release
+is still cooling down. For example, if `0.14.0` is too new but `0.13.0` has
+cleared the cooldown, the recommendation is `0.13.0`.
 
 Missing or invalid publication times are not treated as eligible. If there is
 no eligible upgrade, the current pin is retained without a downgrade. A failed
 lookup on any page reports an unknown status rather than a partial result or a
 claim that the pin is current.
 
-This check never updates uv, opens a uv PR, or writes a uv issue. To upgrade,
-review the release notes and change `UV_VERSION` in both workflows and the
-`UV_VERSION` ARG defaults in both Dockerfiles together; routine
-upgrades should wait for the seven-day cooldown. The dependency
-`bypass_cooldown` input does not change the uv indicator's seven-day policy or
-the installer pin. CI and Docker installs all use the reviewed uv 0.12.7 pin.
+This check never updates uv, opens a uv PR, or writes a separate uv issue. To
+upgrade, review the release notes and change `.uv-version`; routine upgrades
+should wait for the seven-day cooldown. The dependency `bypass_cooldown` input
+does not change the uv indicator's seven-day policy or the installer pin.
 
-To check a uv pin locally without installing anything:
+To check the current pin locally without installing anything:
 
 ```bash
-python scripts/check_uv_version.py --pinned-version 0.12.7
+python scripts/check_uv_version.py --pinned-version "$(tr -d '[:space:]' < .uv-version)"
 ```
 
 The Inspector updater defaults to seven days when invoked locally. Local Python
@@ -758,6 +761,12 @@ summary and PR body explicitly record the bypass, and tests still run. A local
 Inspector bypass is `python scripts/update_inspector_version.py --cooldown-days 0 --npm-lock`.
 This workflow override does not relax Renovate's independent Actions/image policy.
 The `dry_run` input still performs updates and tests but skips PR and issue writes.
+Dependency-update pull requests are opened with the `PAT_TOKEN` repository
+secret when it exists, so required CI workflows run. A classic token needs the
+`repo` scope. If the secret is absent, the workflow falls back to
+`GITHUB_TOKEN` and GitHub may not start those workflows; close and reopen the
+PR to run them. The workflow summary warns when the secret is missing.
+
 Start a fresh run with **Actions > Dependency Updates > Run workflow > main**
 after merging workflow changes. Re-running an older run uses its original commit,
 not the latest code on `main`.
@@ -770,6 +779,14 @@ other downloaded tools, or versions already present in a reviewed lockfile.
 New dependencies execute in CI before PR review, so restricting CI credentials
 remains important. Other workflows and local installs do not automatically gain
 this cutoff; reproducible installs should use the reviewed lockfile.
+
+The Security Scan check is the known-vulnerability gate. `uv audit --frozen`
+scans every extra and dependency group recorded in `uv.lock`, and `npm audit
+--package-lock-only` scans `e2e/package-lock.json`. Bandit scans first-party
+Python and fails the same check. A vulnerable locked version fails CI until the
+lock changes, using a reviewed `bypass_cooldown` run when the fix is newer than
+the cutoff. Local runs require npm on `PATH` and network access to the advisory
+services.
 
 ### Code Organization
 ```

@@ -1,0 +1,29 @@
+name: Install pinned uv
+description: Install the reviewed uv release recorded in .uv-version.
+
+outputs:
+  version:
+    description: Installed uv version
+    value: ${{ steps.pin.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - id: pin
+      shell: bash
+      run: |
+        set -euo pipefail
+        version="$(tr -d '[:space:]' < "${GITHUB_WORKSPACE}/.uv-version")"
+        if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::error::.uv-version must contain an X.Y.Z release"
+          exit 1
+        fi
+        echo "version=${version}" >> "$GITHUB_OUTPUT"
+        echo "UV_VERSION=${version}" >> "$GITHUB_ENV"
+
+    - name: Install uv
+      shell: bash
+      run: |
+        set -euo pipefail
+        curl -LsSf "https://astral.sh/uv/${{ steps.pin.outputs.version }}/install.sh" | sh
+        echo "${HOME}/.cargo/bin" >> "$GITHUB_PATH"

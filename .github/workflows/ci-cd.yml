@@ -5,9 +5,6 @@ on:
   pull_request:
     branches: [ main ]
 
-env:
-  UV_VERSION: "0.12.7"
-
 jobs:
   test:
     name: Test Suite
@@ -25,9 +22,7 @@ jobs:
         python-version: ${{ matrix.python-version }}
 
     - name: Install uv
-      run: |
-        curl -LsSf "https://astral.sh/uv/$UV_VERSION/install.sh" | sh
-        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      uses: ./.github/actions/install-uv
 
     - name: Install dependencies
       run: make install-test
@@ -60,9 +55,7 @@ jobs:
         python-version: "3.14"
 
     - name: Install uv
-      run: |
-        curl -LsSf "https://astral.sh/uv/$UV_VERSION/install.sh" | sh
-        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      uses: ./.github/actions/install-uv
 
     - name: Install dependencies
       run: make install-dev
@@ -83,16 +76,18 @@ jobs:
         python-version: "3.14"
 
     - name: Install uv
-      run: |
-        curl -LsSf "https://astral.sh/uv/$UV_VERSION/install.sh" | sh
-        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      uses: ./.github/actions/install-uv
+
+    - name: Install Node.js for lockfile audit
+      uses: actions/setup-node@v7
+      with:
+        node-version: "24"
 
     - name: Install dependencies
       run: make install-dev
 
     - name: Run security scan
       run: make ci-security
-      continue-on-error: true
 
     - name: Upload Bandit report
       uses: actions/upload-artifact@v4
@@ -142,9 +137,7 @@ jobs:
         python-version: "3.14"
 
     - name: Install uv
-      run: |
-        curl -LsSf "https://astral.sh/uv/$UV_VERSION/install.sh" | sh
-        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      uses: ./.github/actions/install-uv
 
     - name: Install Node.js for MCP Inspector
       uses: actions/setup-node@v7

@@ -1,3 +1,8 @@
+# Security updates only.
+# open-pull-requests-limit: 0 disables routine uv version pull requests.
+# The dependency-updates workflow owns those updates and their cooldown.
+# This entry remains so Dependabot security-update settings apply to uv.
+# Security pull requests use a separate limit and are not disabled here.
 version: 2
 updates:
   - package-ecosystem: "uv"

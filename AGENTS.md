@@ -107,7 +107,7 @@ make lint         # ruff linting
 make format       # ruff formatting
 make format-check # Check formatting without changes
 make type-check   # mypy type checking
-make security     # bandit security scan
+make security     # Bandit and Python/npm lockfile vulnerability scans
 ```
 
 ### CI/CD Simulation
@@ -217,8 +217,11 @@ For complete e2e testing documentation, see [E2E_TESTING.md](./E2E_TESTING.md).
 
 ### Security Scanning
 ```bash
-make security  # Run bandit security scanner
+make security  # Run Bandit and Python/npm lockfile vulnerability scans
 ```
+
+The lockfile scans require npm on `PATH` and network access to the configured
+advisory services.
 
 ### Environment Variables
 - Use `.env` file for development configuration
@@ -300,36 +303,18 @@ make lint format type-check security test
 - **Branch protection**: Required checks for `main` are documented in [docs/BRANCH_PROTECTION.md](docs/BRANCH_PROTECTION.md)
 
 ### Dependency Updates
-The project uses automated dependency updates via GitHub Actions:
 
-- **Schedule**: Monday, Wednesday, and Friday at 09:00 UTC (every two or three days)
-- **Workflow**: `dependency-updates.yml`
-- **Behavior**: Creates PRs updating `uv.lock`, `e2e/inspector-version.lock`, and the Inspector npm manifest/lockfile to the newest compatible releases eligible under a seven-day publication cutoff
-- **Cooldown**: One UTC cutoff is shared by uv (direct and transitive registry artifacts) and Inspector (npm publication timestamps). Unknown Inspector publication times are excluded; the current Inspector pin is retained when no eligible upgrade exists, without downgrading
-- **Inspector execution**: Rebuild its full transitive graph with `--npm-lock` (`npm update --before`); `make inspector-install`, e2e, and `make inspect` use `npm ci --ignore-scripts` and the local executable, not `npx`. The approved initial baseline is 2.9.0; resolution fails if an exact pin cannot satisfy the cutoff
-- **Manual override**: `bypass_cooldown=true` on a manual dispatch bypasses the cutoff for all updates in that run, records a warning, and still runs tests. Use only for reviewed urgent security fixes
-- **uv indicator and installer**: `UV_VERSION` pins uv to 0.12.7 in both workflows and both Dockerfile ARG defaults. Update all copies together after review. The indicator scans paginated release history and recommends the highest newer version that has cleared seven days, even if the latest is too fresh; it never changes pins or writes uv PRs/issues. Lookup failures report unknown status
-- **Notifications**: The reusable **Dependency updates available** issue reports latest/newest-eligible major versions, the manually pinned uv release, and Dex upstream releases. It updates in place each run, closes when no updates need review, and reopens as a new issue if findings recur. Renovate's **Dependency Update Dashboard** tracks Actions/images and deferred cooldown checks; GHCR Dex digest age remains unknown and requires manual review
-- **Actions/images**: Renovate owns these references only, with strict seven-day filtering and no automerge/major updates. Enable the GitHub App after merge; do not enable overlapping Dependabot version updates. Default images are digest-pinned. GHCR lacks supported publication timestamps, so Dex updates are withheld for manual review; do not silently relax timestamp requirements
-- **Testing**: Runs unit tests and e2e (including MCP Inspector integration) before creating PR
-- **Dry run**: `dry_run=true` performs updates and tests without writing issues or opening a PR
+The canonical policy is
+[Automated Dependency Updates](README.md#automated-dependency-updates).
+Keep these boundaries intact:
 
-See [Automated Dependency Updates](README.md#automated-dependency-updates) for
-local commands and coverage limits. To test newly merged changes, start a fresh
-**Run workflow** on `main`; re-running an old run uses its original commit.
-
-**Important**: PRs created by the dependency update workflow use `GITHUB_TOKEN`, which means CI/CD workflows **may not run automatically** on these PRs due to GitHub security restrictions.
-
-**Solutions**:
-1. **Manual trigger**: Close and reopen the dependency update PR to trigger CI/CD workflows
-2. **Setup PAT** (recommended): Create a Personal Access Token with repo permissions and add it as `PAT_TOKEN` repository secret to enable automatic CI triggers
-
-**Setting up PAT for automatic CI**:
-1. Go to GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)
-2. Generate new token with `repo` scope
-3. Add token as repository secret named `PAT_TOKEN`
-4. In the **Create Pull Request** step of `.github/workflows/dependency-updates.yml`, change `token: ${{ secrets.GITHUB_TOKEN }}` to `token: ${{ secrets.PAT_TOKEN }}`
-5. Future dependency PRs will automatically trigger CI/CD workflows
+- The custom workflow owns `uv.lock` and the Inspector npm graph. One UTC cutoff applies to direct and transitive artifacts; unknown timestamps are excluded, and the Inspector pin is never downgraded.
+- Inspector execution uses `npm ci --ignore-scripts` and the local executable, not `npx`.
+- `bypass_cooldown=true` bypasses that cutoff for every update in the run, records a warning, and still runs tests. `dry_run=true` tests without writing the issue or pull request.
+- `.uv-version` is the only uv installer pin. The indicator recommends the highest newer release that has cleared seven days and never edits the pin.
+- Renovate owns Actions and container references only, with digest pins, no automerge, and no major updates. Do not add overlapping Dependabot version updates. `.github/dependabot.yml` is security updates only.
+- The **Dependency updates available** issue reports Python majors, Inspector majors, the uv pin, and Dex GitHub releases. It does not prove GHCR digest age.
+- Dependency pull requests use `PAT_TOKEN` when that secret exists. Otherwise they fall back to `GITHUB_TOKEN` and may need to be closed and reopened before required CI starts.
 
 ### Review Process
 - Ensure all CI/CD checks pass (see [docs/BRANCH_PROTECTION.md](docs/BRANCH_PROTECTION.md) for required checks on `main`)
