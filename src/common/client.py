@@ -83,7 +83,11 @@ def _reraise_http_status_error(retry_state) -> None:
     exception keeps tenacity's default RetryError behavior.
     """
     outcome = getattr(retry_state, "outcome", None)
-    exception = outcome.exception() if outcome is not None else None
+    if outcome is None:
+        # Tenacity always sets an outcome before calling exhaustion callbacks;
+        # nothing to carry forward otherwise.
+        raise RuntimeError("retry exhausted without an outcome")
+    exception = outcome.exception()
     if isinstance(exception, RedfishHTTPStatusError):
         raise exception
     raise RetryError(outcome) from exception
