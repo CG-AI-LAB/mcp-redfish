@@ -491,15 +491,22 @@ class TestRedfishClientHTTPStatusHandling(unittest.TestCase):
     )
     def test_repeated_503_gets_expose_final_body_not_retryerror(self):
         """Exhausted 503 GETs re-raise the final RedfishHTTPStatusError with its
-        Redfish body instead of a generic RetryError."""
+        Redfish body instead of a generic RetryError. Standard Redfish
+        structure: @Message.ExtendedInfo is nested inside the error object."""
         error_body = {
             "error": {
                 "code": "iDRAC.1.5.ServiceUnavailable",
                 "message": "Service temporarily unavailable",
                 "MessageId": "iDRAC.1.5.ServiceUnavailable",
                 "Resolution": "Retry the operation later",
-            },
-            "@Message.ExtendedInfo": [{"MessageId": "iDRAC.1.5.ServiceUnavailable"}],
+                "@Message.ExtendedInfo": [
+                    {
+                        "MessageId": "iDRAC.1.5.ServiceUnavailable",
+                        "Message": "Service temporarily unavailable",
+                        "Resolution": "Retry the operation later",
+                    }
+                ],
+            }
         }
         self.client.client.get.side_effect = lambda path: FakeRestResponse(
             error_body, status=503
@@ -512,7 +519,10 @@ class TestRedfishClientHTTPStatusHandling(unittest.TestCase):
         self.assertIn("503", str(ctx.exception))
         self.assertIn("Service temporarily unavailable", str(ctx.exception))
         self.assertIn("Retry the operation later", str(ctx.exception))
+        # Nested @Message.ExtendedInfo and vendor-specific fields reach the
+        # exception text via the full-body JSON, wherever they are nested.
         self.assertIn("@Message.ExtendedInfo", str(ctx.exception))
+        self.assertIn('"error"', str(ctx.exception))
         self.assertNotIsInstance(ctx.exception, RetryError)
         self.assertGreaterEqual(self.client.client.get.call_count, 3)
 

@@ -223,14 +223,23 @@ class TestGetEndpointData(unittest.IsolatedAsyncioTestCase):
             {"address": "host1", "username": "u", "password": "p"}
         ]
         url = "https://host1/redfish/v1/Systems/1"
+        # Standard Redfish error structure: @Message.ExtendedInfo is nested
+        # inside the error object, alongside vendor-specific fields.
         error_body = {
             "error": {
                 "code": "iDRAC.1.5.ServiceUnavailable",
                 "message": "Service temporarily unavailable",
                 "MessageId": "iDRAC.1.5.ServiceUnavailable",
                 "Resolution": "Retry the operation later",
-            },
-            "@Message.ExtendedInfo": [{"MessageId": "iDRAC.1.5.ServiceUnavailable"}],
+                "@Message.ExtendedInfo": [
+                    {
+                        "MessageId": "iDRAC.1.5.ServiceUnavailable",
+                        "Message": "Service temporarily unavailable",
+                        "Resolution": "Retry the operation later",
+                        "RelatedProperties": ["#System1"],
+                    }
+                ],
+            }
         }
         mock_response = MagicMock()
         mock_response.status = 503
@@ -252,13 +261,20 @@ class TestGetEndpointData(unittest.IsolatedAsyncioTestCase):
 
             # Failed tool result, not a successful one.
             self.assertTrue(result.is_error)
-            # The Redfish error body is preserved in the text content.
+            # The complete Redfish error body (with nested
+            # @Message.ExtendedInfo and vendor-specific fields) is preserved
+            # in the text content.
             text = result.content[0].text
             self.assertIn("503", text)
             self.assertIn("Service temporarily unavailable", text)
             self.assertIn("iDRAC.1.5.ServiceUnavailable", text)
             self.assertIn("Retry the operation later", text)
+            # Nested ExtendedInfo reaches the client, not just top-level
+            # fields: the extended entry and its vendor-specific extra are
+            # inside the error object in the visible text.
             self.assertIn("@Message.ExtendedInfo", text)
+            self.assertIn("RelatedProperties", text)
+            self.assertIn('"error"', text)
             # An HTTP error is never returned as successful data.
             self.assertIsNone(getattr(result, "structured_content", None))
             self.assertIsNone(getattr(result, "data", None))

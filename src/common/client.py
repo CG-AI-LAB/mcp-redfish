@@ -34,9 +34,10 @@ class RedfishHTTPStatusError(Exception):
 
     The Redfish library does not raise for HTTP error statuses; it returns the
     response. Carries the HTTP status code (so the retry predicate can retry
-    only the documented transient statuses) and the Redfish error body, so
-    actionable fields such as message, MessageId, Resolution and
-    @Message.ExtendedInfo are preserved in the error text.
+    only the documented transient statuses) and the complete Redfish error
+    body as JSON in the exception message, so standard fields and
+    vendor-specific ones (message, MessageId, Resolution and
+    @Message.ExtendedInfo, at any nesting) are preserved for the MCP client.
     """
 
     def __init__(self, status: int, body: Any = None):
@@ -46,19 +47,17 @@ class RedfishHTTPStatusError(Exception):
 
 
 def _format_redfish_error(status: int, body: dict[str, Any]) -> str:
-    """Build an error message that keeps the Redfish error body readable."""
-    parts = [f"Redfish request returned HTTP {status}"]
-    if body:
-        error = body.get("error")
-        if isinstance(error, dict):
-            for key in ("message", "MessageId", "Resolution"):
-                value = error.get(key)
-                if value:
-                    parts.append(f"{key}: {value}")
-        extended = body.get("@Message.ExtendedInfo")
-        if extended:
-            parts.append(f"@Message.ExtendedInfo: {json.dumps(extended)}")
-    return "; ".join(parts)
+    """Build an error message that keeps the complete Redfish error body.
+
+    The full parsed response body is included as JSON instead of selected
+    fields, so standard fields and vendor-specific ones (including
+    @Message.ExtendedInfo, wherever the server nests it) all reach the MCP
+    client unchanged. The body is never logged; it only reaches the
+    authorized MCP client as tool-error content.
+    """
+    if not body:
+        return f"Redfish request returned HTTP {status}"
+    return f"Redfish request returned HTTP {status}; response: {json.dumps(body)}"
 
 
 def _raise_for_status(response: Any) -> None:
