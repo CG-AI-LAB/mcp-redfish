@@ -16,6 +16,12 @@
   "pinDigests": true,
   "packageRules": [
     {
+      "description": "Workflows must pin full semver (v4.4.0), not floating majors (v4)",
+      "matchManagers": ["github-actions"],
+      "matchCurrentVersion": "/^v\\d+$/",
+      "enabled": false
+    },
+    {
       "matchUpdateTypes": ["major"],
       "enabled": false
     },

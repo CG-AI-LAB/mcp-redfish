@@ -14,10 +14,10 @@ jobs:
         python-version: ["3.13", "3.14"]
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v4.4.0
 
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v5.6.0
       with:
         python-version: ${{ matrix.python-version }}
 
@@ -35,7 +35,7 @@ jobs:
       continue-on-error: true
 
     - name: Upload coverage reports to Codecov
-      uses: codecov/codecov-action@v4
+      uses: codecov/codecov-action@v4.6.0
       with:
         file: ./coverage.xml
         flags: unittests
@@ -47,10 +47,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v4.4.0
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v5.6.0
       with:
         python-version: "3.14"
 
@@ -68,10 +68,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v4.4.0
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v5.6.0
       with:
         python-version: "3.14"
 
@@ -79,7 +79,7 @@ jobs:
       uses: ./.github/actions/install-uv
 
     - name: Install Node.js for lockfile audit
-      uses: actions/setup-node@v7
+      uses: actions/setup-node@v7.1.0
       with:
         node-version: "24"
 
@@ -90,7 +90,7 @@ jobs:
       run: make ci-security
 
     - name: Upload Bandit report
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v4.6.2
       if: always()
       with:
         name: bandit-report
@@ -103,7 +103,7 @@ jobs:
     # This ensures Docker builds are tested before merging
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v4.4.0
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v4.3.0
@@ -129,10 +129,10 @@ jobs:
     # E2E tests include MCP server startup, inspector integration, and real Redfish testing
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v4.4.0
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v5.6.0
       with:
         python-version: "3.14"
 
@@ -140,7 +140,7 @@ jobs:
       uses: ./.github/actions/install-uv
 
     - name: Install Node.js for MCP Inspector
-      uses: actions/setup-node@v7
+      uses: actions/setup-node@v7.1.0
       with:
         node-version: '24'
 

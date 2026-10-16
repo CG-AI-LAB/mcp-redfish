@@ -692,7 +692,14 @@ No notice changes the version ranges or installs a major upgrade.
 `renovate.json` covers GitHub Actions, both Dockerfiles, and the image references
 in the emulator and Dex scripts. It may create PRs during the M/W/F 09:00-09:59 UTC window
 with a seven-day minimum release age, strict filtering, and no automerge.
-It can propose an older eligible version when the latest is too fresh. Major
+Workflows pin **full semver** action tags (for example `v4.4.0`, not floating
+`v4`). Renovate bumps those versions using the newest release that is at least
+seven days old; when the latest tag is still cooling down, it proposes an older
+eligible release instead of waiting indefinitely. Floating major tags are
+disabled in `renovate.json` so new references cannot drift on moving labels.
+`pinDigests` still adds commit SHAs for supply-chain pinning; ongoing updates are
+semver bumps under the cooldown policy, not digest churn on a moving `v4` line.
+Major
 updates are disabled, and Python image updates stay below 3.15. It does not
 update Python libraries, the Inspector graph, or the manually maintained uv pin,
 so it does not duplicate the existing dependency-update workflow.
@@ -712,9 +719,9 @@ timestamps: if a registry does not provide one, it withholds the update.
 Its Docker datasource currently supplies these timestamps for Docker Hub, not
 GHCR, so Dex's GHCR digest stays pinned for manual review rather than receiving
 an unverified automatic update. Explicit `EMULATOR_IMAGE`/`DEX_IMAGE` overrides
-are operator-controlled and may bypass that protection. GitHub Actions are
-configured for digest pinning by Renovate; existing floating action tags remain
-until those initial pin PRs are reviewed and merged.
+are operator-controlled and may bypass that protection. GitHub Actions use full
+semver tags in workflows; Renovate adds digest SHAs and proposes eligible semver
+bumps under the seven-day policy.
 
 #### uv Maintenance
 
