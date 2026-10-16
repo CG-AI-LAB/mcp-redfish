@@ -18,10 +18,14 @@ sys.path.insert(
     0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../src"))
 )
 
-from fastmcp.exceptions import ValidationError
+from fastmcp.exceptions import ToolError, ValidationError
 from tenacity import RetryError
 
-from src.common.client import RedfishClient, get_retry_configuration
+from src.common.client import (
+    RedfishClient,
+    RedfishHTTPStatusError,
+    get_retry_configuration,
+)
 
 
 class TestRedfishClientRetry(unittest.TestCase):
@@ -349,6 +353,251 @@ class TestRedfishClientRetry(unittest.TestCase):
 
             result = test_jitter_function()
             self.assertEqual(result, "jitter_success")
+
+
+class FakeRestResponse:
+    """Minimal stand-in for a redfish RestResponse."""
+
+    def __init__(self, data, status=200, headers=None):
+        self.dict = data
+        self.status = status
+        self._headers = headers or []
+
+    def getheaders(self):
+        return self._headers
+
+
+class TestRedfishClientHTTPStatusHandling(unittest.TestCase):
+    """Test HTTP error status handling: raise for >=400, retry only the
+    documented transient statuses (408, 429, 502, 503, 504), preserve the
+    Redfish error body, and never status-retry mutating operations."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.server_cfg = {
+            "address": "test-server.example.com",
+            "username": "testuser",
+            "password": "testpass",
+            "port": 443,
+        }
+        self.common_cfg = MagicMock()
+        self.common_cfg.REDFISH_CFG = {
+            "auth_method": "session",
+            "port": 443,
+            "username": "default_user",
+            "password": "default_pass",
+            "tls_verify": True,
+            "tls_server_ca_cert": None,
+        }
+        self.mock_client = MagicMock()
+        with patch("redfish.redfish_client", return_value=self.mock_client):
+            self.client = RedfishClient(self.server_cfg, self.common_cfg)
+
+    @patch.dict(
+        os.environ,
+        {
+            "REDFISH_MAX_RETRIES": "2",
+            "REDFISH_INITIAL_DELAY": "0.01",
+        },
+    )
+    def test_get_retries_on_429_and_returns_data(self):
+        """A 429 response is retried, and a later success returns data."""
+        error_response = FakeRestResponse({"error": "Too Many Requests"}, status=429)
+        ok_response = FakeRestResponse({"Id": "1"}, status=200)
+        self.client.client.get.side_effect = [error_response, ok_response]
+
+        result = self.client.get("/redfish/v1/Systems/1")
+
+        self.assertEqual(result, {"Id": "1"})
+        self.assertEqual(self.client.client.get.call_count, 2)
+
+    @patch.dict(
+        os.environ,
+        {
+            "REDFISH_MAX_RETRIES": "2",
+            "REDFISH_INITIAL_DELAY": "0.01",
+        },
+    )
+    def test_get_retries_on_503_and_returns_data(self):
+        """A 503 response is retried, and a later success returns data."""
+        error_response = FakeRestResponse({"error": "Service Unavailable"}, status=503)
+        ok_response = FakeRestResponse({"Id": "2"}, status=200)
+        self.client.client.get.side_effect = [error_response, ok_response]
+
+        result = self.client.get("/redfish/v1/Systems/2")
+
+        self.assertEqual(result, {"Id": "2"})
+        self.assertEqual(self.client.client.get.call_count, 2)
+
+    @patch.dict(
+        os.environ,
+        {
+            "REDFISH_MAX_RETRIES": "2",
+            "REDFISH_INITIAL_DELAY": "0.01",
+        },
+    )
+    def test_get_raises_on_404_after_one_attempt_preserving_body(self):
+        """A 404 GET fails after one attempt, preserving the Redfish body."""
+        error_response = FakeRestResponse(
+            {
+                "error": {
+                    "code": "iDRAC.1.5.ResourceNotFound",
+                    "message": "The resource could not be found",
+                    "MessageId": "iDRAC.1.5.ResourceNotFound",
+                    "Resolution": "Verify the resource URI",
+                }
+            },
+            status=404,
+        )
+        ok_response = FakeRestResponse({"Id": "3"}, status=200)
+        self.client.client.get.side_effect = [error_response, ok_response]
+
+        with self.assertRaises(RedfishHTTPStatusError) as ctx:
+            self.client.get("/redfish/v1/Systems/3")
+
+        self.assertEqual(ctx.exception.status, 404)
+        self.assertIn("404", str(ctx.exception))
+        self.assertIn("ResourceNotFound", str(ctx.exception))
+        self.assertIn("Verify the resource URI", str(ctx.exception))
+        self.assertEqual(
+            ctx.exception.body["error"]["MessageId"], "iDRAC.1.5.ResourceNotFound"
+        )
+        self.assertEqual(self.client.client.get.call_count, 1)
+
+    @patch.dict(
+        os.environ,
+        {
+            "REDFISH_MAX_RETRIES": "2",
+            "REDFISH_INITIAL_DELAY": "0.01",
+        },
+    )
+    def test_get_with_headers_retries_on_429_and_returns_data(self):
+        """A 429 response is retried in get_with_headers too."""
+        error_response = FakeRestResponse({"error": "Too Many Requests"}, status=429)
+        ok_response = FakeRestResponse({"Id": "4"}, status=200)
+        self.client.client.get.side_effect = [error_response, ok_response]
+
+        result = self.client.get_with_headers("/redfish/v1/Systems/4")
+
+        self.assertEqual(result["data"], {"Id": "4"})
+        self.assertEqual(self.client.client.get.call_count, 2)
+
+    @patch.dict(
+        os.environ,
+        {
+            "REDFISH_MAX_RETRIES": "2",
+            "REDFISH_INITIAL_DELAY": "0.01",
+        },
+    )
+    def test_repeated_503_gets_expose_final_body_not_retryerror(self):
+        """Exhausted 503 GETs re-raise the final RedfishHTTPStatusError with its
+        Redfish body instead of a generic RetryError. Standard Redfish
+        structure: @Message.ExtendedInfo is nested inside the error object."""
+        error_body = {
+            "error": {
+                "code": "iDRAC.1.5.ServiceUnavailable",
+                "message": "Service temporarily unavailable",
+                "MessageId": "iDRAC.1.5.ServiceUnavailable",
+                "Resolution": "Retry the operation later",
+                "@Message.ExtendedInfo": [
+                    {
+                        "MessageId": "iDRAC.1.5.ServiceUnavailable",
+                        "Message": "Service temporarily unavailable",
+                        "Resolution": "Retry the operation later",
+                    }
+                ],
+            }
+        }
+        self.client.client.get.side_effect = lambda path: FakeRestResponse(
+            error_body, status=503
+        )
+
+        with self.assertRaises(RedfishHTTPStatusError) as ctx:
+            self.client.get("/redfish/v1/Systems/5")
+
+        self.assertEqual(ctx.exception.status, 503)
+        self.assertIn("503", str(ctx.exception))
+        self.assertIn("Service temporarily unavailable", str(ctx.exception))
+        self.assertIn("Retry the operation later", str(ctx.exception))
+        # Nested @Message.ExtendedInfo and vendor-specific fields reach the
+        # exception text via the full-body JSON, wherever they are nested.
+        self.assertIn("@Message.ExtendedInfo", str(ctx.exception))
+        self.assertIn('"error"', str(ctx.exception))
+        self.assertNotIsInstance(ctx.exception, RetryError)
+        self.assertGreaterEqual(self.client.client.get.call_count, 3)
+
+    @patch.dict(
+        os.environ,
+        {
+            "REDFISH_MAX_RETRIES": "2",
+            "REDFISH_INITIAL_DELAY": "0.01",
+        },
+    )
+    def test_post_does_not_retry_503(self):
+        """A 503 POST is reported as a failed ToolError, never retried."""
+        error_response = FakeRestResponse(
+            {
+                "error": {
+                    "code": "iDRAC.1.5.ServiceUnavailable",
+                    "message": "Service temporarily unavailable",
+                    "MessageId": "iDRAC.1.5.ServiceUnavailable",
+                }
+            },
+            status=503,
+        )
+        self.client.client.post.side_effect = [error_response]
+
+        with self.assertRaises(ToolError) as ctx:
+            self.client.post(
+                "/redfish/v1/Systems/1/Actions/ComputerSystem.Reset",
+                data={"ResetType": "ForceRestart"},
+            )
+
+        self.assertIn("503", str(ctx.exception))
+        self.assertIn("Service temporarily unavailable", str(ctx.exception))
+        self.assertEqual(self.client.client.post.call_count, 1)
+
+    @patch.dict(
+        os.environ,
+        {
+            "REDFISH_MAX_RETRIES": "2",
+            "REDFISH_INITIAL_DELAY": "0.01",
+        },
+    )
+    def test_patch_does_not_retry_503(self):
+        """A 503 PATCH is reported as a failed ToolError, never retried."""
+        error_response = FakeRestResponse(
+            {"error": {"message": "Service temporarily unavailable"}},
+            status=503,
+        )
+        self.client.client.patch.side_effect = [error_response]
+
+        with self.assertRaises(ToolError) as ctx:
+            self.client.patch("/redfish/v1/Systems/1", data={"Name": "new"})
+
+        self.assertIn("503", str(ctx.exception))
+        self.assertEqual(self.client.client.patch.call_count, 1)
+
+    @patch.dict(
+        os.environ,
+        {
+            "REDFISH_MAX_RETRIES": "2",
+            "REDFISH_INITIAL_DELAY": "0.01",
+        },
+    )
+    def test_delete_does_not_retry_503(self):
+        """A 503 DELETE is reported as a failed ToolError, never retried."""
+        error_response = FakeRestResponse(
+            {"error": {"message": "Service temporarily unavailable"}},
+            status=503,
+        )
+        self.client.client.delete.side_effect = [error_response]
+
+        with self.assertRaises(ToolError) as ctx:
+            self.client.delete("/redfish/v1/Systems/1")
+
+        self.assertIn("503", str(ctx.exception))
+        self.assertEqual(self.client.client.delete.call_count, 1)
 
 
 if __name__ == "__main__":

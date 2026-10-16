@@ -213,6 +213,74 @@ class TestGetEndpointData(unittest.IsolatedAsyncioTestCase):
 
     @patch("src.common.hosts.get_hosts")
     @patch("redfish.redfish_client")
+    async def test_http_error_reaches_mcp_client_as_failed_result(
+        self, mock_redfish_client, mock_get_hosts
+    ):
+        # A Redfish error response must reach the MCP client as a failed tool
+        # result (isError: true) carrying the actionable Redfish error text,
+        # never as successful "data".
+        mock_get_hosts.return_value = [
+            {"address": "host1", "username": "u", "password": "p"}
+        ]
+        url = "https://host1/redfish/v1/Systems/1"
+        # Standard Redfish error structure: @Message.ExtendedInfo is nested
+        # inside the error object, alongside vendor-specific fields.
+        error_body = {
+            "error": {
+                "code": "iDRAC.1.5.ServiceUnavailable",
+                "message": "Service temporarily unavailable",
+                "MessageId": "iDRAC.1.5.ServiceUnavailable",
+                "Resolution": "Retry the operation later",
+                "@Message.ExtendedInfo": [
+                    {
+                        "MessageId": "iDRAC.1.5.ServiceUnavailable",
+                        "Message": "Service temporarily unavailable",
+                        "Resolution": "Retry the operation later",
+                        "RelatedProperties": ["#System1"],
+                    }
+                ],
+            }
+        }
+        mock_response = MagicMock()
+        mock_response.status = 503
+        mock_response.dict = error_body
+        mock_response.getheaders.return_value = []
+        mock_redfish_client_instance = MagicMock()
+        mock_redfish_client_instance.login.return_value = None
+        mock_redfish_client_instance.cafile = None
+        # Repeated 503s: retries exhaust and the final RedfishHTTPStatusError
+        # (not a generic RetryError) must reach the MCP client.
+        mock_redfish_client_instance.get.side_effect = lambda path: mock_response
+        mock_redfish_client_instance.logout.return_value = None
+        mock_redfish_client.return_value = mock_redfish_client_instance
+
+        async with Client(src.common.server.mcp) as client:
+            result = await client.call_tool(
+                "get_resource_data", {"url": url}, raise_on_error=False
+            )
+
+            # Failed tool result, not a successful one.
+            self.assertTrue(result.is_error)
+            # The complete Redfish error body (with nested
+            # @Message.ExtendedInfo and vendor-specific fields) is preserved
+            # in the text content.
+            text = result.content[0].text
+            self.assertIn("503", text)
+            self.assertIn("Service temporarily unavailable", text)
+            self.assertIn("iDRAC.1.5.ServiceUnavailable", text)
+            self.assertIn("Retry the operation later", text)
+            # Nested ExtendedInfo reaches the client, not just top-level
+            # fields: the extended entry and its vendor-specific extra are
+            # inside the error object in the visible text.
+            self.assertIn("@Message.ExtendedInfo", text)
+            self.assertIn("RelatedProperties", text)
+            self.assertIn('"error"', text)
+            # An HTTP error is never returned as successful data.
+            self.assertIsNone(getattr(result, "structured_content", None))
+            self.assertIsNone(getattr(result, "data", None))
+
+    @patch("src.common.hosts.get_hosts")
+    @patch("redfish.redfish_client")
     async def test_http_scheme_raises(self, mock_redfish_client, mock_get_hosts):
         # The Redfish client always connects over HTTPS; an http:// URL must
         # be rejected instead of silently upgraded. The backend client is

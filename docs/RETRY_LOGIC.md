@@ -50,7 +50,8 @@ These exception types are considered retryable:
 - **ConnectionError** - Network connectivity issues
 - **TimeoutError** - Request timeouts
 - **OSError** - Operating system level errors
-- **Generic Exception** - Redfish library exceptions
+
+These exceptions are retried when they reach the retry predicate directly or as the chained cause of a `ToolError`. Redfish library exceptions themselves (for example `RetriesExhaustedError` or `ServerDownOrUnreachableError`) are not retried unless their chained cause is one of the retryable network exceptions above.
 
 ### Non-Retryable Conditions
 These conditions cause immediate failure:
@@ -59,6 +60,13 @@ These conditions cause immediate failure:
 - **403** - Forbidden (authorization failure)
 - **404** - Not Found (resource doesn't exist)
 - **ValidationError** - Invalid configuration or parameters
+- **Other 4xx statuses** - Any HTTP error status outside the retryable set
+
+The Redfish library returns HTTP error status responses instead of raising for them. Every data operation checks the response status and raises `RedfishHTTPStatusError` for statuses >= 400: retryable statuses (408, 429, 502, 503, 504) are retried with backoff, all other error statuses fail fast. An error payload is never returned as if it were resource data.
+
+`RedfishHTTPStatusError` preserves the Redfish error body (`response.dict`), including actionable fields such as message, MessageId, Resolution and @Message.ExtendedInfo, and includes them in its error text. On the GET paths, when all retry attempts fail, the final `RedfishHTTPStatusError` is re-raised instead of a generic `RetryError`, so the Redfish error still reaches the MCP client as a failed tool result.
+
+Mutating operations (POST, PATCH, DELETE) detect and report HTTP error statuses but are never retried on them: a status-based retry can duplicate a mutation whose response was lost (for example a reset action processed by the BMC before a 503 response arrived). Existing network-error retries for mutations are unchanged.
 
 ## Operation Coverage
 
