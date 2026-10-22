@@ -199,6 +199,11 @@ def _out_configs(root: Element) -> list[Element]:
     return elements
 
 
+def class_missing(error: CimcError) -> bool:
+    """True when the CIMC rejected a request because the class does not exist."""
+    return "no class named" in error.description.lower()
+
+
 class CimcClient:
     """XML API client bound to one configured CIMC host."""
 
@@ -423,6 +428,23 @@ class CimcClient:
         before_sleep=before_sleep_log(logger, logging.WARNING),
         after=after_log(logger, logging.DEBUG),
     )
+    def resolve_class_optional(
+        self, class_id: str, hierarchical: bool = False
+    ) -> list[dict[str, Any]] | None:
+        """Like resolve_class, but None when this firmware has no such class.
+
+        Class names moved between CIMC generations (memoryEnvStats became
+        memoryUnitEnvStats, the SEL stopped being exposed as objects). Callers
+        that can live without a class use this to try alternatives.
+        """
+        try:
+            objects: list[dict[str, Any]] = self.resolve_class(class_id, hierarchical)
+            return objects
+        except CimcError as e:
+            if class_missing(e):
+                return None
+            raise
+
     def resolve_children(
         self, dn: str, class_id: str | None = None
     ) -> list[dict[str, Any]]:
@@ -466,6 +488,7 @@ __all__ = [
     "CimcClient",
     "CimcError",
     "build_http_client",
+    "class_missing",
     "escape_xml",
     "is_valid_xml_name",
     "mo_to_dict",

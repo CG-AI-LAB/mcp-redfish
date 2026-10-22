@@ -94,7 +94,63 @@ def _pick(mo: dict[str, Any], **fields: str) -> dict[str, Any]:
 
 
 def _equipped(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [i for i in items if i.get("presence") == "equipped"]
+    """Components physically present.
+
+    Older firmware reports ``presence="equipped"``. Newer firmware omits
+    ``presence`` on some classes (M.2 disks report ``driveSlotStatus``), so an
+    object without a presence attribute counts as present.
+    """
+    present = []
+    for item in items:
+        presence = item.get("presence")
+        if presence is None:
+            if item.get("driveSlotStatus", "Present") != "Absent":
+                present.append(item)
+        elif presence == "equipped":
+            present.append(item)
+    return present
+
+
+def _oper(item: dict[str, Any]) -> str | None:
+    """Operational state; CIMC 2.x says ``operability``, newer says ``operState``."""
+    return item.get("operability") or item.get("operState")
+
+
+def _not_operable(item: dict[str, Any]) -> bool:
+    state = _oper(item)
+    return state is not None and state != "operable"
+
+
+def _first_class(
+    client: CimcClient, *class_ids: str, hierarchical: bool = False
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Resolve the first of ``class_ids`` that exists on this firmware.
+
+    Returns the objects and the class name used, or ``([], None)`` when the
+    firmware has none of them.
+    """
+    for class_id in class_ids:
+        objects = client.resolve_class_optional(class_id, hierarchical)
+        if objects is not None:
+            return objects, class_id
+    return [], None
+
+
+def _optional_class(client: CimcClient, class_id: str) -> list[dict[str, Any]]:
+    return client.resolve_class_optional(class_id) or []
+
+
+def _without_class(mo: dict[str, Any]) -> dict[str, Any]:
+    return {k: v for k, v in mo.items() if k not in ("class", "children")}
+
+
+_OK_DISK_STATES = {
+    "Online",
+    "Unconfigured Good",
+    "JBOD",
+    "Global Hot Spare",
+    "Dedicated Hot Spare",
+}
 
 
 def _server_mo_class(server_dn: str) -> str:
@@ -122,26 +178,43 @@ def _server_summary(client: CimcClient) -> dict[str, Any]:
             uuid="uuid",
             powerState="operPower",
             adminPower="adminPower",
-            operability="operability",
             presence="presence",
+            biosPostState="biosPostState",
+            assetTag="assetTag",
+            userLabel="usrLbl",
             cpus="numOfCpus",
             cores="numOfCores",
             threads="numOfThreads",
             totalMemoryMB="totalMemory",
             availableMemoryMB="availableMemory",
+            memorySpeedMHz="memorySpeed",
             dn="dn",
         ),
+        "operability": _oper(server),
     }
+
+
+def _temps(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        _pick(i, dn="dn", description="description", temperature="temperature")
+        for i in items
+    ]
+
+
+def _board_temps(client: CimcClient) -> dict[str, Any] | None:
+    boards = _optional_class(client, "computeRackUnitMbTempStats")
+    return _without_class(boards[0]) if boards else None
 
 
 def _sensors(client: CimcClient) -> dict[str, Any]:
     fans = client.resolve_class("equipmentFan")
     psus = client.resolve_class("equipmentPsu")
-    cpu_env = client.resolve_class("processorEnvStats")
-    mem_env = client.resolve_class("memoryEnvStats")
-    power = client.resolve_class("computeMbPowerStats")
+    cpu_env = _optional_class(client, "processorEnvStats")
+    mem_env, _ = _first_class(client, "memoryEnvStats", "memoryUnitEnvStats")
+    power = _optional_class(client, "computeMbPowerStats")
     return {
         "address": client.address,
+        "board": _board_temps(client),
         "fans": [
             _pick(
                 f,
@@ -170,12 +243,9 @@ def _sensors(client: CimcClient) -> dict[str, Any]:
             )
             for p in psus
         ],
-        "cpuTemperatures": [
-            _pick(c, dn="dn", temperature="temperature") for c in cpu_env
-        ],
-        "memoryTemperatures": [
-            _pick(m, dn="dn", temperature="temperature") for m in mem_env
-        ],
+        "cpuTemperatures": _temps(cpu_env),
+        "memoryTemperatures": _temps(mem_env),
+        "gpuTemperatures": _temps(_optional_class(client, "gpuInventory")),
         "powerStats": [
             _pick(
                 p,
@@ -200,17 +270,20 @@ def _server_health(client: CimcClient) -> dict[str, Any]:
 
     critical = [f for f in faults if f.get("severity") == "critical"]
     major = [f for f in faults if f.get("severity") == "major"]
-    dimm_issues = [d for d in _equipped(dimms) if d.get("operState") != "operable"]
-    psu_issues = [p for p in _equipped(psus) if p.get("operability") != "operable"]
-    fan_issues = [f for f in _equipped(fans) if f.get("operability") != "operable"]
+    dimm_issues = [d for d in _equipped(dimms) if _not_operable(d)]
+    psu_issues = [p for p in _equipped(psus) if _not_operable(p)]
+    fan_issues = [f for f in _equipped(fans) if _not_operable(f)]
     vdrive_issues = [
         v for v in vdrives if v.get("health") and v.get("health") != "Good"
     ]
     pdisk_issues = [
         p
         for p in _equipped(pdisks)
-        if p.get("pdStatus") not in ("Online", "Unconfigured Good")
+        if (p.get("pdStatus") or "Online") not in _OK_DISK_STATES
+        or p.get("health") not in (None, "", "Good")
     ]
+    # Newer firmware has no operability attribute on the server object; its
+    # absence is not a fault.
     healthy = (
         not critical
         and not major
@@ -219,13 +292,14 @@ def _server_health(client: CimcClient) -> dict[str, Any]:
         and not fan_issues
         and not vdrive_issues
         and not pdisk_issues
-        and server.get("operability") == "operable"
+        and not _not_operable(server)
+        and server.get("operPower", "on") == "on"
     )
     return {
         "address": client.address,
         "overall": "HEALTHY" if healthy else "DEGRADED",
         "powerState": server.get("operPower", "unknown"),
-        "operability": server.get("operability", "unknown"),
+        "operability": _oper(server) or "not-reported",
         "faults": {
             "critical": len(critical),
             "major": len(major),
@@ -288,9 +362,26 @@ def _faults(client: CimcClient, severity: str | None) -> dict[str, Any]:
 
 
 def _event_log(client: CimcClient, limit: int) -> dict[str, Any]:
-    entries = client.resolve_class("syseventLog")
-    if not entries:
-        entries = client.resolve_class("logEntry")
+    entries, class_used = _first_class(client, "syseventLog", "logEntry")
+    if class_used is None:
+        # CIMC 4.x and later do not expose SEL entries as managed objects; the
+        # XML API only reports the log container. Redfish does expose them.
+        logs = _optional_class(client, "sysdebugMEpLog")
+        sel = [_without_class(entry) for entry in logs if entry.get("type") == "SEL"]
+        return {
+            "address": client.address,
+            "total": 0,
+            "showing": 0,
+            "entries": [],
+            "logs": sel,
+            "message": (
+                "This CIMC firmware does not expose System Event Log entries "
+                "through the XML API. Read them over Redfish with "
+                "get_resource_data on https://"
+                f"{client.address}/redfish/v1/Managers/CIMC/LogServices/SEL/Entries "
+                "or use the CIMC CLI 'show sel'."
+            ),
+        }
     shown = entries[:limit]
     return {
         "address": client.address,
@@ -314,9 +405,9 @@ def _event_log(client: CimcClient, limit: int) -> dict[str, Any]:
 def _inventory(client: CimcClient) -> dict[str, Any]:
     cpus = client.resolve_class("processorUnit")
     dimms = client.resolve_class("memoryUnit")
-    pci = client.resolve_class("pciEquipSlot")
-    adapters = client.resolve_class("adaptorUnit")
-    controllers = client.resolve_class("storageController")
+    pci = _optional_class(client, "pciEquipSlot")
+    adapters = _optional_class(client, "adaptorUnit")
+    controllers = _optional_class(client, "storageController")
     firmware = client.resolve_class("firmwareRunning")
     return {
         "address": client.address,
@@ -332,9 +423,9 @@ def _inventory(client: CimcClient) -> dict[str, Any]:
                 coresEnabled="coresEnabled",
                 threads="threads",
                 speed="speed",
-                operability="operability",
                 presence="presence",
             )
+            | {"operability": _oper(c)}
             for c in cpus
         ],
         "memory": [
@@ -350,8 +441,8 @@ def _inventory(client: CimcClient) -> dict[str, Any]:
                 type="type",
                 formFactor="formFactor",
                 location="location",
-                operState="operState",
             )
+            | {"operState": _oper(d)}
             for d in _equipped(dimms)
         ],
         "pciSlots": [
@@ -399,10 +490,10 @@ def _inventory(client: CimcClient) -> dict[str, Any]:
 
 
 def _storage_summary(client: CimcClient) -> dict[str, Any]:
-    controllers = client.resolve_class("storageController")
-    vdrives = client.resolve_class("storageVirtualDrive")
-    pdisks = client.resolve_class("storageLocalDisk")
-    batteries = client.resolve_class("storageRaidBattery")
+    controllers = _optional_class(client, "storageController")
+    vdrives = _optional_class(client, "storageVirtualDrive")
+    pdisks = _optional_class(client, "storageLocalDisk")
+    batteries = _optional_class(client, "storageRaidBattery")
     return {
         "address": client.address,
         "controllers": [
@@ -445,9 +536,12 @@ def _storage_summary(client: CimcClient) -> dict[str, Any]:
                 id="id",
                 vendor="vendor",
                 model="model",
+                productId="productId",
                 serial="serial",
+                driveSerialNumber="driveSerialNumber",
                 size="coercedSize",
                 status="pdStatus",
+                health="health",
                 linkSpeed="linkSpeed",
                 mediaType="mediaType",
                 predictiveFailureCount="predictiveFailureCount",
@@ -472,10 +566,11 @@ def _storage_summary(client: CimcClient) -> dict[str, Any]:
 
 
 def _network_adapters(client: CimcClient) -> dict[str, Any]:
-    adapters = client.resolve_class("adaptorUnit")
-    ext_eth = client.resolve_class("adaptorExtEthIf")
-    host_eth = client.resolve_class("adaptorHostEthIf")
-    network_adapters = client.resolve_class("networkAdapterUnit")
+    adapters = _optional_class(client, "adaptorUnit")
+    ext_eth = _optional_class(client, "adaptorExtEthIf")
+    host_eth = _optional_class(client, "adaptorHostEthIf")
+    network_adapters = _optional_class(client, "networkAdapterUnit")
+    adapter_ports = _optional_class(client, "networkAdapterEthIf")
     return {
         "address": client.address,
         "adapters": [
@@ -509,8 +604,11 @@ def _network_adapters(client: CimcClient) -> dict[str, Any]:
             for h in host_eth
         ],
         "networkAdapters": [
-            _pick(n, dn="dn", model="model", numIntf="numIntf")
+            _pick(n, dn="dn", model="model", slot="slot", numIntf="numIntf")
             for n in network_adapters
+        ],
+        "networkAdapterPorts": [
+            _pick(p, dn="dn", id="id", name="name", mac="mac") for p in adapter_ports
         ],
     }
 
@@ -535,9 +633,10 @@ def _firmware_versions(client: CimcClient) -> dict[str, Any]:
 
 
 def _power_stats(client: CimcClient) -> dict[str, Any]:
-    mb_power = client.resolve_class("computeMbPowerStats")
+    mb_power = _optional_class(client, "computeMbPowerStats")
     psus = client.resolve_class("equipmentPsu")
-    budget = client.resolve_class("powerBudget")
+    budget = _optional_class(client, "powerBudget")
+    monitors = _optional_class(client, "powerMonitor")
     return {
         "address": client.address,
         "motherboardPower": [
@@ -562,34 +661,37 @@ def _power_stats(client: CimcClient) -> dict[str, Any]:
             )
             for p in psus
         ],
-        "powerBudget": [
+        # Budget attributes differ between CIMC generations; pass them through.
+        "powerBudget": [_without_class(b) for b in budget],
+        "powerMonitor": [
             _pick(
-                b,
+                m,
                 dn="dn",
-                powerConsumed="powerConsumed",
-                powerAvailable="powerAvailable",
-                powerCap="powerCap",
-                powerCharacterization="powerCharacterization",
+                domain="domain",
+                currentW="current",
+                averageW="average",
+                minimumW="minimum",
+                maximumW="maximum",
             )
-            for b in budget
+            for m in monitors
         ],
     }
 
 
 def _thermal_stats(client: CimcClient) -> dict[str, Any]:
-    cpu_env = client.resolve_class("processorEnvStats")
-    mem_env = client.resolve_class("memoryEnvStats")
+    cpu_env = _optional_class(client, "processorEnvStats")
+    mem_env, _ = _first_class(client, "memoryEnvStats", "memoryUnitEnvStats")
     fans = client.resolve_class("equipmentFan")
+    board = _board_temps(client)
     server = client.resolve_dn(client.server_dn) or {}
+    ambient = (board or {}).get("ambientTemp") or server.get("ambientTemp") or "unknown"
     return {
         "address": client.address,
-        "ambientTemp": server.get("ambientTemp", "unknown"),
-        "cpuTemperatures": [
-            _pick(c, dn="dn", temperature="temperature") for c in cpu_env
-        ],
-        "memoryTemperatures": [
-            _pick(m, dn="dn", temperature="temperature") for m in mem_env
-        ],
+        "ambientTemp": ambient,
+        "board": board,
+        "cpuTemperatures": _temps(cpu_env),
+        "memoryTemperatures": _temps(mem_env),
+        "gpuTemperatures": _temps(_optional_class(client, "gpuInventory")),
         "fans": [
             _pick(f, dn="dn", id="id", speed="speed", operability="operability")
             for f in fans
@@ -601,13 +703,18 @@ def _bios_settings(client: CimcClient) -> dict[str, Any]:
     settings = client.resolve_dn(f"{client.server_dn}/bios/bios-settings", True)
     if settings is None:
         return {"address": client.address, "total": 0, "tokens": []}
+    parent_dn = settings.get("dn") or f"{client.server_dn}/bios/bios-settings"
     tokens = []
     for child in settings.get("children", []):
         attributes = {k: v for k, v in child.items() if k not in ("class", "children")}
+        # Newer firmware returns only the relative name (rn) on each token.
+        dn = child.get("dn") or (
+            f"{parent_dn}/{child['rn']}" if child.get("rn") else ""
+        )
         tokens.append(
             {
                 "className": child.get("class"),
-                "dn": child.get("dn", ""),
+                "dn": dn,
                 "attributes": attributes,
             }
         )

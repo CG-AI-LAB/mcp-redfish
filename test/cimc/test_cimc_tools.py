@@ -252,6 +252,123 @@ class CimcToolsTestCase(unittest.IsolatedAsyncioTestCase):
         sent = self.fake.configured[-1]
         self.assertEqual(sent.tag, "solIf")
 
+    # -- firmware generation differences (CIMC 4.x/6.x on M5/M6) ------------
+
+    def _make_m6_like(self) -> None:
+        """Reshape the fake into what CIMC 6.0 on a C240 M6 returns."""
+        f = self.fake
+        f.classes.pop("memoryEnvStats")
+        f.classes.pop("syseventLog")
+        f.add(
+            "memoryUnitEnvStats",
+            {
+                "dn": f"{SERVER_DN}/board/memarray-1/mem-1/dimm-env-stats",
+                "id": "1",
+                "description": "DIMM_P1_A1",
+                "temperature": "41.0",
+            },
+        )
+        f.add(
+            "computeRackUnitMbTempStats",
+            {
+                "dn": f"{SERVER_DN}/board/temp-stats",
+                "ambientTemp": "21.0",
+                "frontTemp": "21.0",
+            },
+        )
+        f.add(
+            "sysdebugMEpLog",
+            {
+                "dn": f"{SERVER_DN}/mgmt/log-SEL-0",
+                "type": "SEL",
+                "capacity": "available",
+            },
+        )
+        f.add(
+            "powerMonitor",
+            {
+                "dn": f"{SERVER_DN}/pwrmonitor-Platform",
+                "domain": "Platform",
+                "current": "328",
+                "average": "337",
+                "minimum": "274",
+                "maximum": "855",
+            },
+        )
+        f.add(
+            "networkAdapterEthIf",
+            {
+                "dn": f"{SERVER_DN}/network-adapter-L/eth-1",
+                "id": "1",
+                "name": "eth-1",
+                "mac": "10:f9:20:ea:f0:26",
+            },
+        )
+        # No operability on the server or CPUs, no presence on M.2 disks,
+        # and BIOS tokens carry only rn.
+        server = f.dns[SERVER_DN][1]
+        del server["operability"]
+        del server["ambientTemp"]
+        for attributes, _ in f.classes["processorUnit"]:
+            attributes["operState"] = attributes.pop("operability")
+        for attributes, _ in f.classes["storageLocalDisk"]:
+            del attributes["presence"]
+            attributes["driveSlotStatus"] = "Present"
+            attributes["health"] = "Good"
+        f.dns[f"{SERVER_DN}/bios/bios-settings"] = (
+            "biosSettings",
+            {"dn": f"{SERVER_DN}/bios/bios-settings"},
+            '<biosVfIntelHyperThreadingTech rn="Intel-HyperThreading-Tech" vpIntelHyperThreadingTech="Enabled"/>',
+        )
+
+    async def test_m6_firmware_sensors_thermal_and_event_log(self) -> None:
+        self._make_m6_like()
+        sensors = await self.call("cimc_get_sensors", address=ADDRESS)
+        self.assertEqual(sensors["memoryTemperatures"][0]["temperature"], "41.0")
+        self.assertEqual(sensors["board"]["ambientTemp"], "21.0")
+
+        thermal = await self.call("cimc_get_thermal_stats", address=ADDRESS)
+        self.assertEqual(thermal["ambientTemp"], "21.0")
+        self.assertEqual(thermal["memoryTemperatures"][0]["description"], "DIMM_P1_A1")
+
+        log = await self.call("cimc_get_event_log", address=ADDRESS)
+        self.assertEqual(log["entries"], [])
+        self.assertEqual(log["logs"][0]["type"], "SEL")
+        self.assertIn("LogServices/SEL", log["message"])
+
+    async def test_m6_firmware_health_inventory_bios_power_network(self) -> None:
+        self._make_m6_like()
+        self.fake.classes["faultInst"] = []
+        health = await self.call("cimc_get_server_health", address=ADDRESS)
+        self.assertEqual(health["overall"], "HEALTHY")
+        self.assertEqual(health["operability"], "not-reported")
+        self.assertEqual(health["components"]["physicalDisks"]["total"], 2)
+
+        summary = await self.call("cimc_get_server_summary", address=ADDRESS)
+        self.assertIsNone(summary["operability"])
+
+        inventory = await self.call("cimc_get_inventory", address=ADDRESS)
+        self.assertEqual(inventory["cpus"][0]["operability"], "operable")
+
+        bios = await self.call("cimc_get_bios_settings", address=ADDRESS)
+        self.assertEqual(
+            bios["tokens"][0]["dn"],
+            f"{SERVER_DN}/bios/bios-settings/Intel-HyperThreading-Tech",
+        )
+
+        power = await self.call("cimc_get_power_stats", address=ADDRESS)
+        self.assertEqual(power["powerMonitor"][0]["currentW"], "328")
+        self.assertEqual(power["powerBudget"][0]["powerAvailable"], "770")
+
+        network = await self.call("cimc_get_network_adapters", address=ADDRESS)
+        self.assertEqual(network["networkAdapterPorts"][0]["mac"], "10:f9:20:ea:f0:26")
+
+    async def test_missing_required_class_is_still_an_error(self) -> None:
+        self.fake.classes.pop("equipmentFan")
+        with self.assertRaises(ToolError) as ctx:
+            await self.call("cimc_get_sensors", address=ADDRESS)
+        self.assertIn("no class named equipmentFan", str(ctx.exception))
+
     async def test_cimc_errors_surface_as_tool_errors(self) -> None:
         self.fake.fail_login = True
         with self.assertRaises(ToolError) as ctx:

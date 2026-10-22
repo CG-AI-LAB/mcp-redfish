@@ -49,6 +49,8 @@ Write tools (registered only when `CIMC_ALLOW_WRITES=true`):
 - `cimc_set_locator_led` - chassis locator LED on/off.
 - `cimc_sol_configure` - enable/disable Serial over LAN and set the baud rate.
 
+Verified so far: all read tools against a UCS C240 M6S on CIMC 6.0(2); CIMC 2.x class names come from cimc-mcp (C220 M4). Known gap: CIMC 4.x and later do not expose System Event Log entries as XML API objects, so `cimc_get_event_log` returns the log container and points to the Redfish `LogServices/SEL/Entries` resource, which `get_resource_data` can read.
+
 Which API to use: prefer the Redfish tools for anything a CIMC on firmware 4.0(4) or later exposes; it is the standard interface and works across vendors. Use the CIMC tools for CIMC 2.x/3.x firmware without Redfish, for BIOS tokens and faults in Cisco's own object model, and for the few operations Cisco only exposes through the XML API. UCS Manager-managed servers are not supported by the CIMC tools; they use the UCS Manager XML API.
 
 ## Quick Start

@@ -158,6 +158,18 @@ class CimcClientTestCase(unittest.TestCase):
             settings["children"][0]["class"], "biosVfSelectMemoryRASConfiguration"
         )
 
+    def test_resolve_class_optional_distinguishes_missing_class(self) -> None:
+        with CimcClient(HOST) as client:
+            self.assertIsNone(client.resolve_class_optional("noSuchClass"))
+            self.assertEqual(client.resolve_class_optional("gpuInventory"), [])
+            self.assertEqual(
+                len(client.resolve_class_optional("equipmentPsu") or []), 2
+            )
+            self.fake.fail_login = True
+            reset_sessions()
+            with self.assertRaises(CimcError):
+                client.resolve_class_optional("equipmentPsu")
+
     def test_resolve_children_filters_by_class(self) -> None:
         with CimcClient(HOST) as client:
             psus = client.resolve_children("sys/rack-unit-1", "equipmentPsu")

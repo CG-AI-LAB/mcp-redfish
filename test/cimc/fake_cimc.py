@@ -45,6 +45,16 @@ class FakeCimc:
         # dn -> (class name, attributes, children-xml)
         self.dns: dict[str, tuple[str, dict[str, str], str]] = {}
         self.configured: list[Element] = []
+        # Classes that exist on this firmware but have no instances.
+        self.empty_classes: set[str] = {
+            "adaptorUnit",
+            "adaptorExtEthIf",
+            "adaptorHostEthIf",
+            "networkAdapterEthIf",
+            "gpuInventory",
+            "powerMonitor",
+            "computeRackUnitMbTempStats",
+        }
 
     # -- data population -------------------------------------------------------
 
@@ -157,6 +167,12 @@ class FakeCimc:
             return error
         class_id = root.attrib.get("classId", "")
         hierarchical = root.attrib.get("inHierarchical") == "true"
+        if class_id not in self.classes and class_id not in self.empty_classes:
+            return self._error_xml(
+                "configResolveClass",
+                "ERR-xml-parse-error",
+                f"XML PARSING ERROR: no class named {class_id}",
+            )
         body = "".join(
             self._render(class_id, attributes, children, hierarchical)
             for attributes, children in self.classes.get(class_id, [])
