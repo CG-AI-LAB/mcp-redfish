@@ -8,15 +8,15 @@ packages = ["src"]
 
 [project]
 name = "mcp-redfish"
-version = "0.5.4"
-description = "MCP Server for Redfish API Integration - A natural language interface for managing Redfish-enabled infrastructure"
+version = "0.6.0"
+description = "MCP Server for Redfish API Integration with Cisco CIMC XML API tools - A natural language interface for managing Redfish-enabled and Cisco UCS C-Series infrastructure"
 authors = [{name = "Nokia", email = "opensource@nokia.com"}]
 maintainers = [{name = "Nokia", email = "opensource@nokia.com"}]
 readme = "README.md"
 license = {file = "LICENSE"}
 # 3.13 is deprecated; see docs/PYTHON_RUNTIME.md. Raise to >=3.14 when support ends.
 requires-python = ">=3.13"
-keywords = ["mcp", "redfish", "server", "api", "infrastructure", "management"]
+keywords = ["mcp", "redfish", "cimc", "cisco", "ucs", "server", "api", "infrastructure", "management"]
 dependencies = [
     "fastmcp>=4.0.3,<5",
     "httpx2>=2.12.0,<3",
@@ -24,13 +24,15 @@ dependencies = [
     "certifi>=2026.0.0",
     "python-dotenv>=1.0.0,<2",
     "tenacity>=9.0.0,<10",
+    "defusedxml>=0.7.1,<1",
 ]
 
 [project.urls]
-Homepage = "https://github.com/nokia-steward/mcp-redfish"
-Repository = "https://github.com/nokia-steward/mcp-redfish"
-Documentation = "https://github.com/nokia-steward/mcp-redfish#readme"
-"Bug Tracker" = "https://github.com/nokia-steward/mcp-redfish/issues"
+Homepage = "https://github.com/CG-AI-LAB/mcp-redfish"
+Repository = "https://github.com/CG-AI-LAB/mcp-redfish"
+Documentation = "https://github.com/CG-AI-LAB/mcp-redfish#readme"
+"Bug Tracker" = "https://github.com/CG-AI-LAB/mcp-redfish/issues"
+Upstream = "https://github.com/nokia-steward/mcp-redfish"
 
 [project.optional-dependencies]
 dev = [

@@ -4,6 +4,18 @@ All notable changes to this project are documented in this file.
 
 ## Unreleased
 
+## [0.6.0] - 2026-10-21
+
+CG-AI-LAB fork of nokia-steward/mcp-redfish.
+
+### Added
+
+- Cisco CIMC (standalone UCS C-Series) support through Cisco's XML API, ported from [schwarztim/cimc-mcp](https://github.com/schwarztim/cimc-mcp): `CIMC_HOSTS` configuration with per-host overrides, a session-caching XML API client (`src/common/cimc_client.py`), fifteen read-only `cimc_*` tools (summary, health, sensors, faults, event log, inventory, storage, network, firmware, power, thermal, BIOS settings, generic `configResolveClass`/`configResolveDn`) and four write tools (power control, BIOS token, locator LED, SOL) that are registered only when `CIMC_ALLOW_WRITES=true`.
+- `defusedxml` dependency for parsing CIMC responses.
+- `CIMC_HOSTS` is redacted from logs like `REDFISH_HOSTS`.
+- Tools tolerate class differences between CIMC generations: `memoryUnitEnvStats` and `computeRackUnitMbTempStats` on CIMC 4.x/6.x, `operState` instead of `operability`, disks without a `presence` attribute, BIOS tokens that carry only `rn`, `powerMonitor` and `networkAdapterEthIf` data. `cimc_get_event_log` reports when a firmware does not expose SEL entries through the XML API and points at the Redfish log service instead.
+- Read tools verified against a UCS C240 M6S on CIMC 6.0(2); the write tools and CIMC 2.x are covered by unit tests only.
+
 ## [0.5.4] - 2026-10-08
 
 ### Fixed

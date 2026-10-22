@@ -1,7 +1,7 @@
-# Redfish MCP Server
+# Redfish MCP Server (with Cisco CIMC XML API tools)
 
-> [!WARNING]
-> This repository has moved from [nokia/mcp-redfish](https://github.com/nokia/mcp-redfish) to [nokia-steward/mcp-redfish](https://github.com/nokia-steward/mcp-redfish). New releases and versioned container images are published only as `ghcr.io/nokia-steward/mcp-redfish`.
+> [!NOTE]
+> This is the [CG-AI-LAB](https://github.com/CG-AI-LAB/mcp-redfish) fork of [nokia-steward/mcp-redfish](https://github.com/nokia-steward/mcp-redfish). It adds tools for Cisco Integrated Management Controller (CIMC) on standalone UCS C-Series servers through Cisco's XML API, for servers whose firmware has no Redfish support or where the XML API exposes more detail. The CIMC tool set is ported from [schwarztim/cimc-mcp](https://github.com/schwarztim/cimc-mcp) (MIT). Everything else tracks upstream; see [Cisco CIMC Configuration](#cisco-cimc-xml-api-configuration).
 
 ## Overview
 The Redfish MCP Server is a **natural language interface** designed for agentic applications to efficiently manage infrastructure that exposes [Redfish API](https://www.dmtf.org/standards/redfish) for this purpose. It integrates seamlessly with **MCP (Model Content Protocol) clients**, enabling AI-driven workflows to interact with structured and unstructured data of the infrastructure. Using this MCP Server, you can ask questions like:
@@ -21,6 +21,37 @@ This MCP Server provides tools to manage the data of infrastructure via the Redf
 - `list_servers` to query the Redfish API endpoints that are configured for the MCP Server.
 - `list_discovered_servers` to review Redfish endpoints discovered via SSDP. Discovered endpoints are candidates only and are not managed until explicitly added to `REDFISH_HOSTS`.
 - `get_resource_data` to read the data of a specific resource (e.g. System, EthernetInterface, etc.)
+
+### Cisco CIMC tools (XML API)
+
+These tools talk to the Cisco XML API (`https://<cimc>/nuova`) of standalone UCS C-Series servers listed in `CIMC_HOSTS`. Every tool takes the `address` of a configured host. Sessions are cached per host and refreshed before they expire, because a CIMC allows only a few concurrent sessions.
+
+Read-only (always available):
+
+- `cimc_list_servers` - the CIMC addresses configured in `CIMC_HOSTS`.
+- `cimc_get_server_summary` - power state, model, serial, CPU/memory counts, operability.
+- `cimc_get_server_health` - composite health: faults plus DIMM, PSU, fan and storage status.
+- `cimc_get_sensors` - fans, PSUs, CPU and memory temperatures, motherboard power.
+- `cimc_get_faults` - active faults, most severe first, optionally filtered by severity.
+- `cimc_get_event_log` - System Event Log entries.
+- `cimc_get_inventory` - CPUs, DIMMs, PCI slots, adapters, storage controllers, firmware.
+- `cimc_get_storage_summary` - RAID controllers, virtual drives, physical disks, RAID batteries.
+- `cimc_get_network_adapters` - adapters, external ports, host interfaces.
+- `cimc_get_firmware_versions` - running firmware of every component.
+- `cimc_get_power_stats` / `cimc_get_thermal_stats` - power and thermal detail.
+- `cimc_get_bios_settings` - every BIOS token with class, DN and current value.
+- `cimc_resolve_class` / `cimc_resolve_dn` - generic XML API queries (`configResolveClass`, `configResolveDn`) for anything the dedicated tools do not cover.
+
+Write tools (registered only when `CIMC_ALLOW_WRITES=true`):
+
+- `cimc_power_control` - on, off, graceful shutdown, cycle, hard reset, BMC reset, diagnostic interrupt. Destructive actions require `confirm=true`.
+- `cimc_set_bios_setting` - change one BIOS token (requires `confirm=true`; applies after reboot).
+- `cimc_set_locator_led` - chassis locator LED on/off.
+- `cimc_sol_configure` - enable/disable Serial over LAN and set the baud rate.
+
+Verified so far: all read tools against a UCS C240 M6S on CIMC 6.0(2); CIMC 2.x class names come from cimc-mcp (C220 M4). Known gap: CIMC 4.x and later do not expose System Event Log entries as XML API objects, so `cimc_get_event_log` returns the log container and points to the Redfish `LogServices/SEL/Entries` resource, which `get_resource_data` can read.
+
+Which API to use: prefer the Redfish tools for anything a CIMC on firmware 4.0(4) or later exposes; it is the standard interface and works across vendors. Use the CIMC tools for CIMC 2.x/3.x firmware without Redfish, for BIOS tokens and faults in Cisco's own object model, and for the few operations Cisco only exposes through the XML API. UCS Manager-managed servers are not supported by the CIMC tools; they use the UCS Manager XML API.
 
 ## Quick Start
 
@@ -121,6 +152,40 @@ The `REDFISH_HOSTS` environment variable accepts a JSON array of endpoint config
 - `auth_method` (optional): Authentication method (defaults to global `REDFISH_AUTH_METHOD`)
 - `tls_server_ca_cert` (optional): Path to CA certificate (defaults to global `REDFISH_SERVER_CA_CERT`)
 - `tls_verify` (optional): Verify the server TLS certificate (defaults to global `REDFISH_TLS_VERIFY`, which defaults to `true`)
+
+### Cisco CIMC (XML API) Configuration
+
+CIMC support is optional. When `CIMC_HOSTS` is unset the `cimc_*` read tools are still registered but report no servers.
+
+| Name                   | Description                                                            | Default Value | Required |
+|------------------------|------------------------------------------------------------------------|---------------|----------|
+| `CIMC_HOSTS`           | JSON array of CIMC endpoint configurations (same shape as `REDFISH_HOSTS`) | `[]`        | No       |
+| `CIMC_PORT`            | Default HTTPS port for the XML API                                      | `443`         | No       |
+| `CIMC_USERNAME`        | Default CIMC username                                                   | `""`          | No       |
+| `CIMC_PASSWORD`        | Default CIMC password                                                   | `""`          | No       |
+| `CIMC_SERVER_CA_CERT`  | Path to a CA certificate for verifying CIMC TLS certificates           | `None`        | No       |
+| `CIMC_TLS_VERIFY`      | Verify CIMC TLS certificates                                            | `true`        | No       |
+| `CIMC_ALLOW_WRITES`    | Register the state-changing `cimc_*` tools (power, BIOS, LED, SOL)     | `false`       | No       |
+| `CIMC_TIMEOUT`         | HTTP timeout in seconds for XML API requests                           | `30`          | No       |
+
+```json
+[
+  {"address": "10.10.0.21"},
+  {
+    "address": "10.10.0.22",
+    "username": "admin",
+    "password": "secret",
+    "tls_verify": false,
+    "server_dn": "sys/rack-unit-1"
+  }
+]
+```
+
+**Per-host properties:** `address` (required), `port`, `username`, `password`, `tls_server_ca_cert`, `tls_verify` (all defaulting to the global `CIMC_*` value) and `server_dn`, the distinguished name of the server object. It defaults to `sys/rack-unit-1`, which is correct for every standalone rack server; a node inside a multi-node chassis uses `sys/chassis-1/server-1`.
+
+CIMC factory certificates are self-signed, so most deployments either install a CA-signed certificate on the CIMC and point `CIMC_SERVER_CA_CERT` at the CA, or set `tls_verify` to `false` for lab hosts. Disabling verification is logged as a warning. Like `REDFISH_HOSTS`, the value of `CIMC_HOSTS` is redacted from logs.
+
+The retry policy (`REDFISH_MAX_RETRIES` and related variables) also applies to CIMC read operations. Writes are never retried.
 
 ### TLS Certificate Verification
 
@@ -808,12 +873,16 @@ src/
 ├── main.py              # Entry point and console script
 ├── common/              # Shared utilities
 │   ├── __init__.py     # Package exports
-│   ├── config.py       # Configuration management
+│   ├── config.py       # Configuration management (Redfish + CIMC)
+│   ├── client.py       # Redfish client with retry logic
+│   ├── cimc_config.py  # CIMC_HOSTS parsing and validation
+│   ├── cimc_client.py  # Cisco CIMC XML API client (sessions, queries, configConfMo)
 │   └── hosts.py        # Host discovery and validation
 └── tools/              # MCP tool implementations
     ├── __init__.py
-    ├── redfish_tools.py # Core Redfish operations
-    └── tool_registry.py # Tool registration
+    ├── get.py          # get_resource_data (Redfish)
+    ├── servers.py      # list_servers, list_discovered_servers (Redfish)
+    └── cimc.py         # cimc_* tools (Cisco XML API)
 ```
 
 ### Execution Patterns
