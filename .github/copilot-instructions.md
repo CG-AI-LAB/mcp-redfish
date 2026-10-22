@@ -11,6 +11,7 @@ This is a **FastMCP-based Model Context Protocol (MCP) server** that provides a 
 - **`src/tools/`**: MCP tool implementations using `@mcp.tool()` decorators (auto-registered via imports)
 - **`src/common/client.py`**: Redfish client wrapper with retry logic using `tenacity` library
 - **`src/common/discovery.py`**: SSDP discovery for automatic Redfish endpoint detection
+- **`src/common/cimc_client.py`** / **`src/common/cimc_config.py`** / **`src/tools/cimc.py`**: Cisco CIMC XML API support (CG-AI-LAB fork); write tools gated by `CIMC_ALLOW_WRITES`
 
 **Tool Registration Pattern**: Tools are auto-registered by importing modules in `src/tools/__init__.py`. Each tool uses `@mcp.tool()` decorator from the global `mcp` instance.
 

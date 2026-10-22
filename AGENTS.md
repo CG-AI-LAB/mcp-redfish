@@ -4,6 +4,8 @@
 
 The Redfish MCP Server is a Python-based Model Context Protocol (MCP) server that provides a natural language interface for managing infrastructure via Redfish APIs. It uses FastMCP framework and integrates with the Python Redfish library to enable AI agents to interact with Redfish-enabled infrastructure components.
 
+This CG-AI-LAB fork adds Cisco CIMC (UCS C-Series) tools that use Cisco's XML API instead of Redfish. They live in `src/common/cimc_config.py`, `src/common/cimc_client.py` and `src/tools/cimc.py`, with tests in `test/cimc/` (a fake CIMC served through `httpx2.MockTransport`). Keep CIMC code in those files so merges from upstream stay small; the only upstream files touched are `src/common/config.py`, `src/tools/__init__.py`, `src/common/logging_utils.py` and `test/conftest.py`. Write tools are registered only when `CIMC_ALLOW_WRITES=true`; never register a state-changing CIMC tool unconditionally.
+
 **Key Technologies:**
 - Python 3.14 recommended; Python 3.13 supported but deprecated ([runtime policy](docs/PYTHON_RUNTIME.md))
 - FastMCP framework

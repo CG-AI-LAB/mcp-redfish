@@ -30,7 +30,7 @@ _PEM_KEY_PATTERN = re.compile(
 def _is_sensitive_environment_name(name: str) -> bool:
     normalized = name.upper()
     return (
-        normalized == "REDFISH_HOSTS"
+        normalized in {"REDFISH_HOSTS", "CIMC_HOSTS"}
         or normalized == "MCP_AUTH_JWT_PUBLIC_KEY"
         or normalized
         in {

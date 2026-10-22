@@ -12,6 +12,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from .cimc_config import CimcConfig, load_cimc_config
 from .validation import (
     ConfigurationError,
     MCPConfig,
@@ -35,6 +36,13 @@ REDFISH_CONFIG: RedfishConfig
 MCP_CONFIG: MCPConfig
 try:
     REDFISH_CONFIG, MCP_CONFIG = load_validated_config()
+except ConfigurationError as error:
+    raise fatal_configuration_error(error) from None
+
+# Cisco CIMC XML API endpoints (optional; empty when CIMC_HOSTS is unset).
+CIMC_CONFIG: CimcConfig
+try:
+    CIMC_CONFIG = load_cimc_config()
 except ConfigurationError as error:
     raise fatal_configuration_error(error) from None
 

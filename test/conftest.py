@@ -22,6 +22,10 @@ os.environ.update(
         "REDFISH_PASSWORD": "test_password",
         "MCP_TRANSPORT": "stdio",
         "REDFISH_DISCOVERY_ENABLED": "false",
+        "CIMC_HOSTS": '[{"address": "cimc-test.example.com"}]',
+        "CIMC_USERNAME": "cimc_user",
+        "CIMC_PASSWORD": "cimc_password",
+        "CIMC_ALLOW_WRITES": "true",
         "MCP_REDFISH_LOG_LEVEL": "WARNING",  # Reduce log noise in tests
         # Fast retry configuration for testing - SET BEFORE IMPORTS
         "REDFISH_MAX_RETRIES": "2",

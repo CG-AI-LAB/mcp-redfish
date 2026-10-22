@@ -9,6 +9,7 @@ Imports all tool modules to register them with the MCP server.
 
 # Import all tool modules to register them with MCP
 from . import (
+    cimc,  # noqa: F401
     get,  # noqa: F401
     servers,  # noqa: F401
 )
